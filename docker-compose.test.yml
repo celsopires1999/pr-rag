@@ -1,0 +1,13 @@
+services:
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile.test
+    container_name: prrag-tests
+    environment:
+      TEST_CONNECTION_STRING: "Host=db;Port=5432;Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
+    depends_on:
+      db:
+        condition: service_healthy
+    profiles:
+      - test

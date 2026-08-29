@@ -1,0 +1,17 @@
+# Secrets and local config
+.env
+*.env
+!*.env.example
+
+# .NET build artifacts
+bin/
+obj/
+*.user
+
+# Docker volumes / runtime data (keep the data file in repo via .gitkeep)
+data/*.json
+
+# IDE
+.vs/
+.idea/
+*.swp

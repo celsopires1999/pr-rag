@@ -1,0 +1,18 @@
+# Build stage
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY PrRag.sln ./
+COPY src/PrRag.Application/PrRag.Application.csproj src/PrRag.Application/
+COPY tools/PrRag.DataGenerator/PrRag.DataGenerator.csproj tools/PrRag.DataGenerator/
+RUN dotnet restore tools/PrRag.DataGenerator/PrRag.DataGenerator.csproj
+
+COPY src/ src/
+COPY tools/ tools/
+RUN dotnet publish tools/PrRag.DataGenerator/PrRag.DataGenerator.csproj -c Release -o /app/publish --no-restore
+
+# Runtime stage
+FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
+WORKDIR /app
+COPY --from=build /app/publish .
+ENTRYPOINT ["dotnet", "PrRag.DataGenerator.dll"]

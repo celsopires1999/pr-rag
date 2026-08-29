@@ -1,0 +1,52 @@
+services:
+  db:
+    image: pgvector/pgvector:pg18
+    container_name: prrag-db
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-prrag}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-prrag}
+      POSTGRES_DB: ${POSTGRES_DB:-prrag}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - db_data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-prrag} -d ${POSTGRES_DB:-prrag}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: prrag-api
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Development
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
+      OpenAI__ApiKey: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in the environment}
+      OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      RAG__TopK: ${RAG_TOP_K:-5}
+      RAG__MinSimilarity: ${RAG_MIN_SIMILARITY:-0.7}
+      Data__FilePath: /data/purchase.json
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./data:/data:ro
+
+  datagen:
+    build:
+      context: .
+      dockerfile: Dockerfile.datagen
+    container_name: prrag-datagen
+    profiles:
+      - tools
+    volumes:
+      - ./data:/data
+
+volumes:
+  db_data:

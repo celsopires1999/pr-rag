@@ -1,0 +1,11 @@
+# Run integration tests inside a container against the Postgres service.
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
+WORKDIR /src
+
+COPY PrRag.sln ./
+COPY src/ src/
+COPY tests/ tests/
+COPY tools/ tools/
+
+WORKDIR /src/tests/PrRag.Tests
+RUN dotnet test --configuration Release
