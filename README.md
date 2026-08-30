@@ -45,12 +45,22 @@ cp .env.example .env
 
 ### 2. Start the stack
 
+By default only the database is started as a long-running service:
+
 ```bash
-docker compose up --build
+docker compose up -d
 ```
 
 This starts:
 - **db** — `pgvector/pgvector:pg18` (creates schema via EF Core migrations on API startup)
+
+The **api** (and its `OpenAI__ApiKey`) is guarded behind the `demo` profile, so the key is never resolved into `docker compose config` during everyday development. Start it explicitly only when you need a full runtime demo:
+
+```bash
+docker compose --profile demo up --build api
+```
+
+This additionally starts:
 - **api** — the .NET 10 API on `http://localhost:8080`
 
 ### 3. Generate synthetic data

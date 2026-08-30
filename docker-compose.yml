@@ -16,17 +16,25 @@ services:
       timeout: 5s
       retries: 12
 
+  # Runtime API. Guarded behind the "demo" profile: it is NOT started by the
+  # default `up` (or by the DevContainer flow), so the OpenAI key interpolation
+  # in `docker compose config` does not leak it into everyday dev logs. Start
+  # it on demand when you actually need a full runtime demo:
+  #   docker compose --profile demo up --build api
   api:
     build:
       context: .
       dockerfile: Dockerfile
     container_name: prrag-api
+    profiles:
+      - demo
     depends_on:
       db:
         condition: service_healthy
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
+      OpenAI__ApiKey: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in the environment}
       OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
       RAG__TopK: ${RAG_TOP_K:-5}
