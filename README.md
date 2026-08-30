@@ -197,6 +197,128 @@ Covered scenarios:
 - Re-import with no changes does **not** re-embed.
 - Changed/new rows are upserted and re-embedded.
 
+## Development environment (DevContainer)
+
+For an out-of-the-box development experience, this repository ships a **DevContainer** (VS Code / GitHub Codespaces) that provides the .NET 10 SDK, recommended extensions, and ready-to-use debug/task configuration — **no `dotnet` install on your host is required**. Everything (build, run, test, debug) happens inside the container, reusing the `pgvector` database service from the compose stack.
+
+### Prerequisites
+
+- **Docker + Docker Compose v2** running on your host.
+- **VS Code** with the **Dev Containers** extension (or GitHub **Codespaces**).
+- An **OpenAI API key** in `.env` if you plan to run/debug the API (see [Quick start](#quick-start)).
+
+### First-time Open
+
+1. Install the **Dev Containers** extension for VS Code.
+2. Open the repository folder.
+3. Run **"Reopen in Container"** (Command Palette → `Dev Containers: Reopen in Container`).
+
+On the first open VS Code pulls/builds the `.NET 10` SDK image — this can take a few minutes the first time. When ready, a terminal opens inside the container rooted at `/workspaces`.
+
+Opening the container starts the `devcontainer` service (defined in `docker-compose.yml`), which also starts the `db` service (`pgvector`) automatically. The recommended extensions (C#, C# Dev Kit, Docker, PostgreSQL, EditorConfig) are installed automatically into the container.
+
+> Requires an `OPENAI_API_KEY` set in `.env` to run/debug the API. The key is read via `envFile: .env` and is never committed.
+
+### Setting up `.env`
+
+The `.env` file (git-ignored) supplies the secrets/configuration used by the API and the dev container:
+
+```bash
+cp .env.example .env
+# edit .env and set OPENAI_API_KEY
+```
+
+For the F5 debug launch to pick up the key, `.env` must also expose it under the .NET config key the app reads. The `.env` therefore contains **both** forms:
+
+```ini
+OPENAI_API_KEY=sk-...          # compose/runtime (OPENAI_ prefix)
+OpenAI__ApiKey=sk-...          # .NET config key|debug reads via envFile
+```
+
+(`.env.example` documents these entries; keep the two values in sync.) The debug/task configuration loads `.env` via `envFile`, so no API key is injected into the `devcontainer` service environment or printed by `docker compose config`.
+
+Changes to `.env` are picked up by relaunching the API from VS Code (the debug/task configuration loads it via `envFile`).
+
+### Building, running and testing
+
+Inside the container a normal `dotnet` workflow works:
+
+```bash
+dotnet restore PrRag.sln     # restore packages
+dotnet build PrRag.sln       # build the solution
+dotnet run --project src/PrRag.Api   # run the API
+dotnet test tests/PrRag.Tests        # run the tests
+```
+
+Or use the pre-configured VS Code tasks (all run the in-container SDK):
+
+- **Build** — `Ctrl/Cmd+Shift+B` (`dotnet build PrRag.sln`).
+- **Watch** — Terminal → **Run Task…** → `build`/`watch` to rebuild on change and run `dotnet watch`.
+- **Test** — Terminal → **Run Task…** → `test` to run the test suite.
+
+### Debugging (F5)
+
+Press **F5** — the `PreRag.Api (DevContainer)` launch configuration:
+
+1. Runs the `build` task (so the API is up to date).
+2. Starts `PrRag.Api` in **Debug** using the in-container SDK.
+3. Connects to the `db` service (`ConnectionStrings__Default` from `.env`).
+4. Serves on `http://0.0.0.0:8080` (`ASPNETCORE_URLS` is set) and the port is forwarded to your host, so you can hit `http://localhost:8080` from your browser.
+
+Set breakpoints and step through the code as usual.
+
+### Using the database from the container
+
+The container includes the `postgresql-client`, so you can inspect the `db` service directly:
+
+```bash
+psql "postgresql://prrag:prrag@db:5432/prrag"
+```
+
+Useful queries:
+
+```sql
+SELECT count(*) FROM purchase_requisitions;          -- stored requisitions
+SELECT count(*) FROM purchase_requisitions WHERE embedding IS NOT NULL; -- embedded
+```
+
+### Generating data
+
+The generator and API keep using the bind-mounted `./data` folder. From the container you can generate the demo dataset with:
+
+```bash
+docker compose --profile tools run --rm datagen /data/purchase.json
+```
+
+The API auto-ingests the new file (file watcher) or you can trigger ingestion manually:
+
+```bash
+curl -X POST http://localhost:8080/api/ingest
+```
+
+### Running the integration tests
+
+Tests run against the `db` service from the compose stack. From the container, either:
+
+```bash
+dotnet test tests/PrRag.Tests
+```
+
+or, to run them via the dedicated test container (no `dotnet` on the host), from the repository root on the host:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test up --build test
+```
+
+> Note: the integration tests currently need the `vector` extension present in the target database of the ephemeral `prrag_test_*` databases (a known, tracked follow-up).
+
+### Troubleshooting
+
+- **Port 8080 already in use** — stop other containers or change the forwarded port in `.devcontainer/devcontainer.json` (`forwardPorts`).
+- **Stale container** — reopen the container again (rebuild) or run `docker compose build devcontainer`.
+- **API can't reach the DB** — confirm the `db` service is healthy with `docker compose ps` and that `.env` has the `ConnectionStrings__Default` pointing to `db`.
+- **OpenAI errors** — verify `OPENAI_API_KEY` is set and valid in `.env`.
+
 ## Project structure
 
 ```

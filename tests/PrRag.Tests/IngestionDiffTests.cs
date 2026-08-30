@@ -22,7 +22,7 @@ public class IngestionDiffTests : IAsyncLifetime
 
     public async Task InitializeAsync()
     {
-        _connectionString = $"{BaseConnectionString};Database={_dbName}";
+        _connectionString = $"{ConnectionTemplate};Database={_dbName}";
 
         (_provider, _embeddings, _dataDir) = IntegrationServiceFactory.Create(_connectionString);
 

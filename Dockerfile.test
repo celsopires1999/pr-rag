@@ -1,4 +1,10 @@
-# Run integration tests inside a container against the Postgres service.
+# Build/test image for the integration tests.
+#
+# The image compiles the test project during build (so compile errors surface
+# at build time) but the tests themselves run at CONTAINER RUNTIME via the
+# entrypoint. Running them at runtime (instead of a build-time `RUN dotnet
+# test`) lets the container wait for the `db` service through `depends_on`,
+# since the database does not exist while the image is being built.
 FROM mcr.microsoft.com/dotnet/sdk:10.0 AS build
 WORKDIR /src
 
@@ -8,4 +14,15 @@ COPY tests/ tests/
 COPY tools/ tools/
 
 WORKDIR /src/tests/PrRag.Tests
-RUN dotnet test --configuration Release
+RUN dotnet build --configuration Release --no-restore
+
+FROM mcr.microsoft.com/dotnet/sdk:10.0 AS runtime
+WORKDIR /src
+
+COPY PrRag.sln ./
+COPY src/ src/
+COPY tests/ tests/
+COPY tools/ tools/
+
+# Run the tests when the container starts (db is available via depends_on).
+ENTRYPOINT ["dotnet", "test", "tests/PrRag.Tests/PrRag.Tests.csproj", "--configuration", "Release"]

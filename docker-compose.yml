@@ -27,7 +27,6 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
-      OpenAI__ApiKey: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in the environment}
       OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
       OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
       RAG__TopK: ${RAG_TOP_K:-5}
@@ -47,6 +46,27 @@ services:
       - tools
     volumes:
       - ./data:/data
+
+  # Development container (VS Code / Codespaces). This service has no
+  # `profiles` because the Dev Containers CLI runs `docker compose up -d`
+  # without `--profile`; giving it a profile would exclude it from the up and
+  # the DevContainer would never start (the classic "open seems stuck" hang).
+  devcontainer:
+    build:
+      context: .
+      dockerfile: .devcontainer/Dockerfile
+    container_name: prrag-devcontainer
+    volumes:
+      - .:/workspaces:cached
+      - /var/run/docker.sock:/var/run/docker.sock
+    environment:
+      ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
+      OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
+      OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
+      RAG__TopK: ${RAG_TOP_K:-5}
+      RAG__MinSimilarity: ${RAG_MIN_SIMILARITY:-0.7}
+      Data__FilePath: /workspaces/data/purchase.json
+    command: sleep infinity
 
 volumes:
   db_data:
