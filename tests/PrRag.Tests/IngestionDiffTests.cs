@@ -26,9 +26,7 @@ public class IngestionDiffTests : IAsyncLifetime
 
         (_provider, _embeddings, _dataDir) = IntegrationServiceFactory.Create(_connectionString);
 
-        using var scope = _provider.CreateScope();
-        var db = scope.ServiceProvider.GetRequiredService<PrRagDbContext>();
-        await db.Database.MigrateAsync();
+        await TestDatabase.MigrateAndReloadTypesAsync(_provider);
     }
 
     public async Task DisposeAsync()

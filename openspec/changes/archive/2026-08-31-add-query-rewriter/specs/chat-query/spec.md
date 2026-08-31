@@ -1,10 +1,4 @@
-# Chat Query
-
-## Purpose
-
-Natural-language Q&A over purchase requisitions, answering questions grounded in context retrieved via vector similarity search over embeddings using the configured embedding and chat models.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Chat over purchase requisitions
 The system SHALL accept a natural-language question and return an answer grounded in purchased-requisition context retrieved via vector similarity search over embeddings, using the configured embedding and chat models. When the exact code-based search does not fill the configured retrieval depth, the system SHALL rewrite the question into an optimized English query before embedding, and SHALL use the original question in the final answer prompt.
@@ -32,21 +26,3 @@ The system SHALL accept a natural-language question and return an answer grounde
 #### Scenario: Original question used for final answer
 - **WHEN** a vector search is performed using a rewritten query
 - **THEN** the system still builds the final answer prompt using the original user question
-
-### Requirement: RAG controls configured via environment
-The system SHALL expose the embedding model, chat model, and default retrieval parameters through `IConfiguration`/environment, and SHALL use environment-provided API key without committing it.
-
-#### Scenario: Default control values
-- **WHEN** the client omits `top_k` and `min_similarity`
-- **THEN** the system uses the configured defaults for both parameters
-
-#### Scenario: API key supplied at runtime
-- **WHEN** the system starts with an API key provided via environment
-- **THEN** it authenticates against the OpenAI API without the key appearing in the repository
-
-### Requirement: Non-streaming chat responses
-The system SHALL return chat answers as a complete response rather than streaming tokens.
-
-#### Scenario: Full response returned
-- **WHEN** a client calls `POST /api/chat`
-- **THEN** the system returns the complete answer in a single response body

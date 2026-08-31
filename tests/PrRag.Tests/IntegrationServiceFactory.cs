@@ -1,7 +1,10 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Npgsql;
+using Pgvector.Npgsql;
 using PrRag.Application;
 using PrRag.Application.Abstractions;
 using PrRag.Application.Configuration;
@@ -12,7 +15,10 @@ namespace PrRag.Tests;
 
 public static class IntegrationServiceFactory
 {
-    public static (ServiceProvider Provider, FakeEmbeddingService Embeddings, string DataDir) Create(
+    public static (
+        ServiceProvider Provider,
+        FakeEmbeddingService Embeddings,
+        string DataDir) Create(
         string connectionString)
     {
         var dataDir = Path.Combine(Path.GetTempPath(), $"prrag-tests-{Guid.NewGuid():N}");
@@ -21,6 +27,8 @@ public static class IntegrationServiceFactory
         var config = new ConfigurationBuilder().Build();
 
         var embeddingService = new FakeEmbeddingService();
+        var rewriter = new FakeQueryRewriter();
+        var chatClient = new FakeChatClient();
         var services = new ServiceCollection();
 
         services.AddLogging();
@@ -29,10 +37,22 @@ public static class IntegrationServiceFactory
         services.Configure<RagSettings>(opts => { });
         services.Configure<OpenAISettings>(opts => { });
 
+        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
+#if NET8_0_OR_GREATER
+#pragma warning disable NPG9001 // evaluation-only API; required for pgvector type mapping
+        dataSourceBuilder.AddTypeInfoResolverFactory(new VectorTypeInfoResolverFactory());
+#pragma warning restore NPG9001
+#endif
+        var dataSource = dataSourceBuilder.Build();
+
         services.AddDbContext<PrRagDbContext>(options =>
-            options.UseNpgsql(connectionString, npgsql => npgsql.UseVector()));
+            options.UseNpgsql(dataSource, npgsql => npgsql.UseVector()));
 
         services.AddSingleton<IEmbeddingService>(embeddingService);
+        services.AddSingleton(rewriter);
+        services.AddSingleton<IQueryRewriter>(rewriter);
+        services.AddSingleton(chatClient);
+        services.AddSingleton<IChatClient>(chatClient);
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
         services.AddApplication();
 

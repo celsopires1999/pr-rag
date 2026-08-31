@@ -15,17 +15,20 @@ public sealed class ChatService : IChatService
 
     private readonly IChatClient _chatClient;
     private readonly IEmbeddingService _embeddingService;
+    private readonly IQueryRewriter _queryRewriter;
     private readonly IPurchaseRequisitionRepository _repository;
     private readonly RagSettings _ragSettings;
 
     public ChatService(
         IChatClient chatClient,
         IEmbeddingService embeddingService,
+        IQueryRewriter queryRewriter,
         IPurchaseRequisitionRepository repository,
         IOptions<RagSettings> ragSettings)
     {
         _chatClient = chatClient;
         _embeddingService = embeddingService;
+        _queryRewriter = queryRewriter;
         _repository = repository;
         _ragSettings = ragSettings.Value;
     }
@@ -70,7 +73,8 @@ public sealed class ChatService : IChatService
 
         if (results.Count < topK)
         {
-            var questionEmbedding = await _embeddingService.GenerateAsync(request.Question, cancellationToken);
+            var optimizedQuery = await _queryRewriter.RewriteAsync(request.Question, cancellationToken);
+            var questionEmbedding = await _embeddingService.GenerateAsync(optimizedQuery, cancellationToken);
             var vectorResults = await _repository.SearchAsync(questionEmbedding, topK, minSimilarity, cancellationToken);
             foreach (var r in vectorResults)
             {

@@ -43,6 +43,7 @@ public static class DependencyInjection
 
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
         services.AddScoped<IEmbeddingService, OpenAiEmbeddingService>();
+        services.AddScoped<IQueryRewriter, OpenAiQueryRewriter>();
 
         services.AddHostedService<FileWatcherService>();
 
