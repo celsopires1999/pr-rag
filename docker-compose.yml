@@ -34,11 +34,11 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
-      OpenAI__ApiKey: ${OPENAI_API_KEY:?OPENAI_API_KEY must be set in the environment}
-      OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
-      RAG__TopK: ${RAG_TOP_K:-5}
-      RAG__MinSimilarity: ${RAG_MIN_SIMILARITY:-0.7}
+      OpenAI__ApiKey: ${OpenAI__ApiKey:?OpenAI__ApiKey must be set in the environment}
+      OpenAI__EmbeddingModel: ${OpenAI__EmbeddingModel:-text-embedding-3-small}
+      OpenAI__ChatModel: ${OpenAI__ChatModel:-gpt-4o-mini}
+      RAG__TopK: ${RAG__TopK:-5}
+      RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /data/purchase.json
     ports:
       - "${API_PORT:-8080}:8080"
@@ -69,10 +69,10 @@ services:
       - /var/run/docker.sock:/var/run/docker.sock
     environment:
       ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
-      OpenAI__EmbeddingModel: ${OPENAI_EMBEDDING_MODEL:-text-embedding-3-small}
-      OpenAI__ChatModel: ${OPENAI_CHAT_MODEL:-gpt-4o-mini}
-      RAG__TopK: ${RAG_TOP_K:-5}
-      RAG__MinSimilarity: ${RAG_MIN_SIMILARITY:-0.7}
+      OpenAI__EmbeddingModel: ${OpenAI__EmbeddingModel:-text-embedding-3-small}
+      OpenAI__ChatModel: ${OpenAI__ChatModel:-gpt-4o-mini}
+      RAG__TopK: ${RAG__TopK:-5}
+      RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /workspaces/data/purchase.json
     command: sleep infinity
 

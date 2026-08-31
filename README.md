@@ -32,7 +32,7 @@ Everything runs in Docker containers — no local .NET SDK required.
 ## Prerequisites
 
 - Docker + Docker Compose (with Compose v2, the `docker compose` command)
-- An OpenAI API key (`OPENAI_API_KEY`)
+- An OpenAI API key (`OpenAI__ApiKey`)
 
 ## Quick start
 
@@ -40,7 +40,7 @@ Everything runs in Docker containers — no local .NET SDK required.
 
 ```bash
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY
+# edit .env and set OpenAI__ApiKey
 ```
 
 ### 2. Start the stack
@@ -162,16 +162,17 @@ curl http://localhost:8080/health
 
 ## Configuration
 
-All settings come from environment variables / `IConfiguration` (see `.env.example`).
+All settings come from environment variables / `IConfiguration` (see `.env.example`). Each setting has a **single** name — the `.NET` config key — which both the compose runtime and the F5 debug launch read:
 
-| Variable | Section key | Default |
+| `.env` key (single source) | Section key | Default |
 |---|---|---|
-| `OPENAI_API_KEY` | `OpenAI:ApiKey` | *(required)* |
-| `OPENAI_EMBEDDING_MODEL` | `OpenAI:EmbeddingModel` | `text-embedding-3-small` |
-| `OPENAI_CHAT_MODEL` | `OpenAI:ChatModel` | `gpt-4o-mini` |
-| `RAG_TOP_K` | `RAG:TopK` | `5` |
-| `RAG_MIN_SIMILARITY` | `RAG:MinSimilarity` | `0.7` |
+| `OpenAI__ApiKey` | `OpenAI:ApiKey` | *(required)* |
+| `OpenAI__EmbeddingModel` | `OpenAI:EmbeddingModel` | `text-embedding-3-small` |
+| `OpenAI__ChatModel` | `OpenAI:ChatModel` | `gpt-4o-mini` |
+| `RAG__TopK` | `RAG:TopK` | `5` |
+| `RAG__MinSimilarity` | `RAG:MinSimilarity` | `0.7` |
 | `POSTGRES_USER/PASSWORD/DB` | `ConnectionStrings:Default` | `prrag` |
+| `API_PORT` | (compose host mapping) | `8080` |
 | — | `Data:FilePath` | `/data/purchase.json` |
 
 > **Note:** the embedding model determines the vector dimension (1536 for `text-embedding-3-small`). Changing to a model with different dimensions requires a new migration/reindex.
@@ -227,7 +228,7 @@ On the first open VS Code pulls/builds the `.NET 10` SDK image — this can take
 
 Opening the container starts the `devcontainer` service (defined in `docker-compose.yml`), which also starts the `db` service (`pgvector`) automatically. The recommended extensions (C#, C# Dev Kit, Docker, PostgreSQL, EditorConfig) are installed automatically into the container.
 
-> Requires an `OPENAI_API_KEY` set in `.env` to run/debug the API. The key is read via `envFile: .env` and is never committed.
+> Requires an `OpenAI__ApiKey` set in `.env` to run/debug the API. The key is read via `envFile: .env` and is never committed.
 
 ### Setting up `.env`
 
@@ -235,17 +236,16 @@ The `.env` file (git-ignored) supplies the secrets/configuration used by the API
 
 ```bash
 cp .env.example .env
-# edit .env and set OPENAI_API_KEY
+# edit .env and set OpenAI__ApiKey
 ```
 
-For the F5 debug launch to pick up the key, `.env` must also expose it under the .NET config key the app reads. The `.env` therefore contains **both** forms:
+There is exactly **one name per setting** — the compose file interpolates the very same `.NET` keys the F5 debug reads via `envFile`, so nothing is duplicated:
 
 ```ini
-OPENAI_API_KEY=sk-...          # compose/runtime (OPENAI_ prefix)
-OpenAI__ApiKey=sk-...          # .NET config key|debug reads via envFile
+OpenAI__ApiKey=sk-...    # single key, used by both the demo runtime and the debug launch
 ```
 
-(`.env.example` documents these entries; keep the two values in sync.) The debug/task configuration loads `.env` via `envFile`, so no API key is injected into the `devcontainer` service environment or printed by `docker compose config`.
+The debug/task configuration loads `.env` via `envFile`, so no API key is injected into the `devcontainer` service environment or printed by `docker compose config`.
 
 Changes to `.env` are picked up by relaunching the API from VS Code (the debug/task configuration loads it via `envFile`).
 
@@ -327,7 +327,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test u
 - **Port 8080 already in use** — stop other containers or change the forwarded port in `.devcontainer/devcontainer.json` (`forwardPorts`).
 - **Stale container** — reopen the container again (rebuild) or run `docker compose build devcontainer`.
 - **API can't reach the DB** — confirm the `db` service is healthy with `docker compose ps` and that `.env` has the `ConnectionStrings__Default` pointing to `db`.
-- **OpenAI errors** — verify `OPENAI_API_KEY` is set and valid in `.env`.
+- **OpenAI errors** — verify `OpenAI__ApiKey` is set and valid in `.env`.
 
 ## Project structure
 
