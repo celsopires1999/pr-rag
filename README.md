@@ -9,7 +9,8 @@ Everything runs in Docker containers — no local .NET SDK required.
 - **.NET 10** API (`Microsoft.Extensions.AI` + OpenAI), EF Core + Npgsql + `Pgvector.EntityFrameworkCore`
 - **PostgreSQL 18** with `pgvector` (HNSW index) storing requisitions + their embeddings
 - **Incremental ingestion**: automatic file watch + manual trigger; diffs and re-embeds only changed rows
-- **Chat query** with configurable `top_k` and `min_similarity`
+- **Chat query** with configurable `top_k` and `min_similarity`, plus **server-sent-event (SSE) streaming** and **multi-turn** conversation history
+- **React web front-end** (Shadcn/ui, ChatGPT-style) to chat with streaming answers, trigger ingestion, tune RAG params, and view system status
 - **Synthetic data generator** for a realistic demo dataset (~3k rows over 18 months)
 - Layered solution + integration tests for the ingest diff
 
@@ -63,6 +64,17 @@ docker compose --profile demo up --build api
 This additionally starts:
 - **api** — the .NET 10 API on `http://localhost:8080`
 
+To also run the **web front-end** (chat / ingestion / status UI) alongside the API:
+
+```bash
+docker compose --profile demo up --build web api
+```
+
+This additionally starts:
+- **web** — the React (Vite) front-end on `http://localhost:5173`
+
+The web UI calls the API cross-origin; the API allows the origins listed in `CORS__AllowedOrigins` (default `http://localhost:5173`).
+
 ### 3. Generate synthetic data
 
 Generate the purchase requisitions JSON into the bind-mounted `./data` folder:
@@ -77,6 +89,36 @@ docker compose --profile tools run --rm datagen /data/purchase.json
 > ```
 
 The API watches `data/purchase.json` and ingests it automatically. You can also trigger ingestion manually (see below).
+
+### 5. Use the web front-end (optional)
+
+The same UI can be run in **development mode** (Vite dev server with HMR) instead of the container:
+
+```bash
+cd web
+npm install
+npm run dev        # serves http://localhost:5173
+```
+
+In dev mode the front-end targets `http://localhost:8080` by default (the API). If your API runs elsewhere, set the base URL via `VITE_API_BASE_URL` in `web/.env.local`:
+
+```bash
+VITE_API_BASE_URL=http://localhost:8080
+```
+
+The API must allow your browser's origin — the default `CORS__AllowedOrigins=http://localhost:5173` matches this dev setup.
+
+## Web front-end
+
+`web/` is a Vite + React + TypeScript single-page UI with a persistent left sidebar and routed pages:
+
+- **Chat** (default page) — ChatGPT-style: a scrollable message list with user/assistant bubbles and a bottom input. Answers **stream** in as tokens arrive (SSE via `/api/chat/stream`), and **multi-turn history** is sent so follow-up questions have context.
+- **Sidebar** — navigation links (Chat / Status), editable RAG parameters (`top_k`, `min_similarity`, shared with the Chat page via a `RagSettingsContext`), and a manual **ingest** button.
+- **Status** — auto-refreshing requisition/embedded counts and last sync (get via `/api/status`).
+
+It talks to the API endpoints in [`src/PrRag.Api/Program.cs`](src/PrRag.Api/Program.cs); the client types mirror the .NET DTOs in `web/src/types.ts` and calls live in `web/src/api.ts`.
+
+## API
 
 ### 4. Ask a question
 
@@ -116,6 +158,36 @@ If no requisitions meet the similarity threshold, the answer is:
 ```json
 { "answer": "I don't have enough information in the purchase requisitions to answer that.", "retrievedCount": 0 }
 ```
+
+### `POST /api/chat/stream`
+
+Streams the chat answer over **Server-Sent Events** (SSE), and supports **multi-turn** conversation by passing prior messages. Each token is written as a `data:` line; the stream ends with `data: [DONE]`.
+
+Request:
+
+```json
+{
+  "question": "What about Acme pumps?",
+  "top_k": 5,                            // optional (default: RAG:TopK = 5)
+  "min_similarity": 0.7,                 // optional (default: RAG:MinSimilarity = 0.7)
+  "messages": [                          // optional prior conversation history
+    { "role": "user", "content": "Which suppliers provide hydraulic pumps?" },
+    { "role": "assistant", "content": "Acme Industrial Supply and Beta Components Ltd provide hydraulic pumps." }
+  ]
+}
+```
+
+Response (text/event-stream):
+
+```text
+data: Acme and Beta both
+
+data: supply hydraulic pumps.
+
+data: [DONE]
+```
+
+The `messages` history is included in the prompt sent to the model so follow-up questions have context; RAG retrieval is always scoped to the current `question`.
 
 ### `POST /api/ingest`
 
@@ -173,7 +245,11 @@ All settings come from environment variables / `IConfiguration` (see `.env.examp
 | `RAG__MinSimilarity` | `RAG:MinSimilarity` | `0.7` |
 | `POSTGRES_USER/PASSWORD/DB` | `ConnectionStrings:Default` | `prrag` |
 | `API_PORT` | (compose host mapping) | `8080` |
+| `WEB_PORT` | (compose host mapping) | `5173` |
+| `CORS__AllowedOrigins` | `Cors:AllowedOrigins` | `http://localhost:5173` |
 | — | `Data:FilePath` | `/data/purchase.json` |
+
+> `CORS__AllowedOrigins` is a comma-separated list of origins permitted to call the API cross-origin. Add `http://localhost:8080` when testing the UI served from the API host. Overriding it is required if you serve the front-end from a different port.
 
 > **Note:** the embedding model determines the vector dimension (1536 for `text-embedding-3-small`). Changing to a model with different dimensions requires a new migration/reindex.
 
@@ -339,10 +415,12 @@ PrRag.sln
 │   └── PrRag.Api/              # ASP.NET Web API host + endpoints
 ├── tests/PrRag.Tests/          # ingest diff integration tests
 ├── tools/PrRag.DataGenerator/  # synthetic data generator
+├── web/                        # React (Vite) front-end
 ├── data/                       # bind-mounted into the API (/data/purchase.json)
 ├── docker-compose.yml
 ├── docker-compose.test.yml
 ├── Dockerfile
+├── Dockerfile.web
 └── .env.example
 ```
 

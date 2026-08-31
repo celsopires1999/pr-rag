@@ -40,10 +40,26 @@ services:
       RAG__TopK: ${RAG__TopK:-5}
       RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /data/purchase.json
+      Cors__AllowedOrigins: ${CORS__AllowedOrigins:-http://localhost:5173}
     ports:
       - "${API_PORT:-8080}:8080"
     volumes:
       - ./data:/data:ro
+      - ./reports:/app/reports
+
+  # Web front-end. Also guarded behind the "demo" profile, matching the API.
+  #   docker compose --profile demo up --build web api
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+    container_name: prrag-web
+    profiles:
+      - demo
+    depends_on:
+      - api
+    ports:
+      - "${WEB_PORT:-5173}:80"
 
   datagen:
     build:

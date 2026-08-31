@@ -61,3 +61,10 @@ The chat answer pipeline SHALL additionally emit an observability trace for each
 #### Scenario: Public response contract unchanged
 - **WHEN** a client sends `POST /api/chat`
 - **THEN** the response body remains identical to the behavior without observability, and report generation has no effect on the response
+
+### Requirement: Non-streaming endpoint remains the compatibility path
+The `POST /api/chat` endpoint SHALL continue to return complete, non-streaming responses as the compatibility path, with streaming available via a separate endpoint.
+
+#### Scenario: Non-streaming endpoint unaffected
+- **WHEN** a client calls `POST /api/chat`
+- **THEN** the endpoint returns the complete answer in a single response body as before

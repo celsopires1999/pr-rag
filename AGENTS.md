@@ -22,6 +22,12 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test u
 
 There is no linter, formatter, or typecheck script beyond `dotnet build`.
 
+The Vite + React front-end in `web/` has its own verify:
+
+```bash
+cd web && npm install && npm run build
+```
+
 ## Architecture
 
 Layered .NET 10 solution (`PrRag.sln`):
@@ -31,8 +37,11 @@ Layered .NET 10 solution (`PrRag.sln`):
 - **PrRag.Api** — ASP.NET minimal API host. Calls `AddApplication()` / `AddInfrastructure()` for DI, runs migrations on startup via `DbInitializer.ApplyMigrationsAsync`.
 - **PrRag.Tests** — xUnit integration tests against a real Postgres. Uses fakes for OpenAI (no API key needed).
 - **PrRag.DataGenerator** — standalone console tool, outputs `purchase.json`.
+- **web/** — Vite + React + TypeScript front-end, not part of the .NET solution. Calls the API endpoints (`/api/chat`, `/api/ingest`, `/api/status`).
 
 Dependency direction: Api -> Infrastructure -> Application.
+
+The API enables cross-origin access from the origins in `Cors__AllowedOrigins` (comma-separated, default `http://localhost:5173`). The `web` service runs under the `demo` profile in `docker-compose.yml`; NPM-driven builds are separate from `dotnet build`.
 
 ## Key gotchas
 
@@ -41,6 +50,7 @@ Dependency direction: Api -> Infrastructure -> Application.
 - **`data/purchase.json`** is a bind-mount volume. The API watches it for changes (FileSystemWatcher + debounce). The file is read-only inside the API container.
 - **Settings use `__` separator** in `.env` (e.g. `OpenAI__ApiKey`) — these are the same `.NET` config keys the app reads. No duplication.
 - **EF Core migrations auto-apply on API startup.** No manual step needed. To create explicit migrations: `dotnet ef migrations add <Name> --project src/PrRag.Infrastructure/PrRag.Infrastructure.csproj`.
+- **CORS is config-driven**: `Cors__AllowedOrigins` (default `http://localhost:5173`) controls what origins may call the API from the browser. Add origins (comma-separated) if the front-end is served elsewhere.
 
 ## Tests
 

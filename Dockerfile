@@ -11,7 +11,7 @@ RUN dotnet restore src/PrRag.Api/PrRag.Api.csproj
 
 COPY src/ src/
 COPY tools/ tools/
-RUN dotnet publish src/PrRag.Api/PrRag.Api.csproj -c Release -o /app/publish --no-restore
+RUN dotnet publish src/PrRag.Api/PrRag.Api.csproj -c Release -o /app/publish
 
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS runtime
