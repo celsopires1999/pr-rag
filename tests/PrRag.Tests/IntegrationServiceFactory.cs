@@ -36,6 +36,8 @@ public static class IntegrationServiceFactory
         services.Configure<DataSettings>(opts => opts.FilePath = Path.Combine(dataDir, "purchase.json"));
         services.Configure<RagSettings>(opts => { });
         services.Configure<OpenAISettings>(opts => { });
+        services.Configure<ReportSettings>(opts => opts.OutputDirectory = Path.Combine(dataDir, "reports"));
+        services.AddSingleton<IRagReportWriter, FileRagReportWriter>();
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 #if NET8_0_OR_GREATER

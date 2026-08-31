@@ -1,5 +1,6 @@
 using System.Text;
 using Microsoft.Extensions.AI;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using PrRag.Application.Abstractions;
 using PrRag.Application.Configuration;
@@ -17,6 +18,8 @@ public sealed class ChatService : IChatService
     private readonly IEmbeddingService _embeddingService;
     private readonly IQueryRewriter _queryRewriter;
     private readonly IPurchaseRequisitionRepository _repository;
+    private readonly IRagReportWriter _reportWriter;
+    private readonly ILogger<ChatService> _logger;
     private readonly RagSettings _ragSettings;
 
     public ChatService(
@@ -24,12 +27,16 @@ public sealed class ChatService : IChatService
         IEmbeddingService embeddingService,
         IQueryRewriter queryRewriter,
         IPurchaseRequisitionRepository repository,
+        IRagReportWriter reportWriter,
+        ILogger<ChatService> logger,
         IOptions<RagSettings> ragSettings)
     {
         _chatClient = chatClient;
         _embeddingService = embeddingService;
         _queryRewriter = queryRewriter;
         _repository = repository;
+        _reportWriter = reportWriter;
+        _logger = logger;
         _ragSettings = ragSettings.Value;
     }
 
@@ -43,8 +50,19 @@ public sealed class ChatService : IChatService
         ChatRequest request,
         CancellationToken cancellationToken = default)
     {
-        var topK = request.TopK > 0 ? request.TopK : _ragSettings.TopK;
-        var minSimilarity = request.MinSimilarity > 0 ? request.MinSimilarity : _ragSettings.MinSimilarity;
+        var topKFromRequest = request.TopK > 0;
+        var minSimilarityFromRequest = request.MinSimilarity > 0;
+        var topK = topKFromRequest ? request.TopK : _ragSettings.TopK;
+        var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
+
+        var report = new RagQueryReport
+        {
+            Question = request.Question,
+            TopK = topK,
+            MinSimilarity = minSimilarity,
+            TopKFromRequest = topKFromRequest,
+            MinSimilarityFromRequest = minSimilarityFromRequest,
+        };
 
         var items = ItemRegex.Matches(request.Question)
             .Select(m => m.Value)
@@ -58,6 +76,7 @@ public sealed class ChatService : IChatService
 
         var results = new List<Domain.PurchaseRequisition>();
         var seen = new HashSet<string>();
+        var similarities = new Dictionary<string, double?>(StringComparer.OrdinalIgnoreCase);
 
         if (items.Count > 0 || supplierCodes.Count > 0)
         {
@@ -67,6 +86,7 @@ public sealed class ChatService : IChatService
                 if (seen.Add(r.PurchaseRequisitionId))
                 {
                     results.Add(r);
+                    similarities[r.PurchaseRequisitionId] = null;
                 }
             }
         }
@@ -74,13 +94,17 @@ public sealed class ChatService : IChatService
         if (results.Count < topK)
         {
             var optimizedQuery = await _queryRewriter.RewriteAsync(request.Question, cancellationToken);
+            report.RewrittenQuery = optimizedQuery;
+
             var questionEmbedding = await _embeddingService.GenerateAsync(optimizedQuery, cancellationToken);
             var vectorResults = await _repository.SearchAsync(questionEmbedding, topK, minSimilarity, cancellationToken);
-            foreach (var r in vectorResults)
+            foreach (var result in vectorResults)
             {
+                var r = result.Requisition;
                 if (seen.Add(r.PurchaseRequisitionId))
                 {
                     results.Add(r);
+                    similarities[r.PurchaseRequisitionId] = result.Similarity;
                 }
 
                 if (results.Count >= topK)
@@ -90,20 +114,56 @@ public sealed class ChatService : IChatService
             }
         }
 
+        report.RetrievedCount = results.Count;
+
+        ChatResponse response;
         if (results.Count == 0)
         {
-            return new ChatResponse { Answer = NoContextMessage, RetrievedCount = 0 };
+            report.UsedNoContextFallback = true;
+            response = new ChatResponse { Answer = NoContextMessage, RetrievedCount = 0 };
+        }
+        else
+        {
+            var prompt = BuildPrompt(request.Question, results);
+
+            var chatResponse = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
+            response = new ChatResponse
+            {
+                Answer = chatResponse.Text,
+                RetrievedCount = results.Count,
+            };
         }
 
-        var prompt = BuildPrompt(request.Question, results);
-
-        var response = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
-
-        return new ChatResponse
+        report.Answer = response.Answer;
+        foreach (var r in results)
         {
-            Answer = response.Text,
-            RetrievedCount = results.Count,
-        };
+            report.RetrievedItems.Add(new RagRetrievedItem
+            {
+                PurchaseRequisitionId = r.PurchaseRequisitionId,
+                SupplierCode = r.SupplierCode,
+                SupplierName = r.SupplierName,
+                Item = r.Item,
+                ItemName = r.ItemName,
+                Description = r.Description,
+                Similarity = similarities.TryGetValue(r.PurchaseRequisitionId, out var sim) ? sim : null,
+            });
+        }
+
+        await WriteReportAsync(report, cancellationToken);
+
+        return response;
+    }
+
+    private async Task WriteReportAsync(RagQueryReport report, CancellationToken cancellationToken)
+    {
+        try
+        {
+            await _reportWriter.WriteAsync(report, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to write RAG observability report");
+        }
     }
 
     private static string BuildPrompt(string question, IReadOnlyList<Domain.PurchaseRequisition> results)

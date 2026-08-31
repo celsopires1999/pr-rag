@@ -12,6 +12,9 @@ dotnet/        # .NET SDK host cache (e.g. runfile-discovery)
 # Docker volumes / runtime data (keep the data file in repo via .gitkeep)
 data/*.json
 
+# RAG observability reports (generated, never committed)
+reports/
+
 # IDE
 .vs/
 .idea/

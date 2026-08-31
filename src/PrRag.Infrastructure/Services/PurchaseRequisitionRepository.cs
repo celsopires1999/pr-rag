@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using PrRag.Application.Abstractions;
 using PrRag.Application.Domain;
+using PrRag.Application.DTOs;
 using PrRag.Infrastructure.Persistence;
 
 namespace PrRag.Infrastructure.Services;
@@ -52,7 +53,7 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
         await _db.SaveChangesAsync(cancellationToken);
     }
 
-    public async Task<IReadOnlyList<PurchaseRequisition>> SearchAsync(
+    public async Task<IReadOnlyList<RequisitionSearchResult>> SearchAsync(
         float[] queryEmbedding,
         int topK,
         double minSimilarity,
@@ -61,7 +62,14 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
         var queryVector = new Pgvector.Vector(queryEmbedding);
 
         var sql = """
-            SELECT *
+            SELECT
+                purchase_requisition AS "PurchaseRequisitionId",
+                supplier_code AS "SupplierCode",
+                supplier_name AS "SupplierName",
+                item AS "Item",
+                item_name AS "ItemName",
+                description AS "Description",
+                1 - (embedding <=> {0}) AS "Similarity"
             FROM purchase_requisitions
             WHERE embedding IS NOT NULL
               AND 1 - (embedding <=> {0}) >= {1}
@@ -69,9 +77,33 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
             LIMIT {2}
             """;
 
-        return await _db.PurchaseRequisitions
-            .FromSqlRaw(sql, queryVector, minSimilarity, topK)
+        var rows = await _db.Database.SqlQueryRaw<SearchRow>(sql, queryVector, minSimilarity, topK)
             .ToListAsync(cancellationToken);
+
+        return rows
+            .Select(r => new RequisitionSearchResult(r.ToEntity(), r.Similarity))
+            .ToList();
+    }
+
+    private sealed class SearchRow
+    {
+        public string PurchaseRequisitionId { get; set; } = string.Empty;
+        public string SupplierCode { get; set; } = string.Empty;
+        public string SupplierName { get; set; } = string.Empty;
+        public string Item { get; set; } = string.Empty;
+        public string ItemName { get; set; } = string.Empty;
+        public string Description { get; set; } = string.Empty;
+        public double Similarity { get; set; }
+
+        public PurchaseRequisition ToEntity() => new()
+        {
+            PurchaseRequisitionId = PurchaseRequisitionId,
+            SupplierCode = SupplierCode,
+            SupplierName = SupplierName,
+            Item = Item,
+            ItemName = ItemName,
+            Description = Description,
+        };
     }
 
     public async Task<IReadOnlyList<PurchaseRequisition>> SearchByCodesAsync(

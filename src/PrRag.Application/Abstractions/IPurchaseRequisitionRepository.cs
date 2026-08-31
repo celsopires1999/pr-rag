@@ -13,7 +13,7 @@ public interface IPurchaseRequisitionRepository
         IReadOnlyCollection<PurchaseRequisition> requisitions,
         CancellationToken cancellationToken = default);
 
-    Task<IReadOnlyList<PurchaseRequisition>> SearchAsync(
+    Task<IReadOnlyList<RequisitionSearchResult>> SearchAsync(
         float[] queryEmbedding,
         int topK,
         double minSimilarity,
