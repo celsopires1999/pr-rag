@@ -75,6 +75,30 @@ This additionally starts:
 
 The web UI calls the API cross-origin; the API allows the origins listed in `CORS__AllowedOrigins` (default `http://localhost:5173`).
 
+#### Non-root containers
+
+All service containers run their primary process as an **unprivileged, non-root user** (a security best practice):
+
+- **api** — runs as the .NET `app` user (UID `1654`)
+- **web** — runs as the `nginx` user on port `8080` inside the container
+- **datagen** — runs as the .NET `app` user (UID `1654`)
+- **test** — runs as the .NET `app` user (UID `1654`)
+- **db** — runs as the official Postgres non-root `postgres` user
+- **devcontainer** — runs as the non-root `vscode` user
+
+Because these users own the code but not the host, the two **writable bind mounts** must be writable by the container user on the host for the API and generator to write their output:
+
+- `./reports` → mounted at `/app/reports` (the **api** writes RAG observability reports here; container user UID `1654`)
+- `./data` → mounted at `/data` (the **datagen** writes the dataset here; container user UID `1654`)
+
+Ensure the host-owned directories allow the container user to write (e.g. `chown` them to your user or grant the container UID):
+
+```bash
+sudo chown -R 1654:1654 data reports   # example: grant the .NET container user (UID 1654) ownership
+```
+
+The read-only `./data` mount used by the **api** (`/data:ro`) does not require this.
+
 ### 3. Generate synthetic data
 
 Generate the purchase requisitions JSON into the bind-mounted `./data` folder:

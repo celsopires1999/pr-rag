@@ -24,5 +24,11 @@ COPY src/ src/
 COPY tests/ tests/
 COPY tools/ tools/
 
+# Run as a non-root user (the .NET SDK image's built-in `app` user, UID
+# $APP_UID). The test runner needs a writable working tree so that it can write
+# build/test artifacts under /src.
+RUN chown -R app:app /src
+
 # Run the tests when the container starts (db is available via depends_on).
+USER app
 ENTRYPOINT ["dotnet", "test", "tests/PrRag.Tests/PrRag.Tests.csproj", "--configuration", "Release"]

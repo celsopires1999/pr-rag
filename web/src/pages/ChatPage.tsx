@@ -3,6 +3,7 @@ import { Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
+import { ThinkingIndicator } from '@/components/ThinkingIndicator'
 import { chatStream } from '@/api'
 import { useRagSettings } from '@/context/RagSettingsContext'
 import type { ChatMessage } from '@/types'
@@ -105,7 +106,7 @@ export function ChatPage() {
                 )}
               >
                 <CardContent className="whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed">
-                  {m.content || (streaming ? '…' : '')}
+                  {streaming && !m.content ? <ThinkingIndicator /> : m.content}
                 </CardContent>
               </Card>
             </div>

@@ -14,5 +14,14 @@ RUN dotnet publish tools/PrRag.DataGenerator/PrRag.DataGenerator.csproj -c Relea
 # Runtime stage
 FROM mcr.microsoft.com/dotnet/runtime:10.0 AS runtime
 WORKDIR /app
+
+# Run as a non-root user (the .NET image's built-in `app` user, UID $APP_UID).
+# The container mounts ./data at /data, which the operator must make writable
+# by $APP_UID (default 1654) for the generator to write the dataset (see
+# README / docker-compose.yml).
+RUN mkdir -p /data \
+    && chown -R app:app /app /data
+
 COPY --from=build /app/publish .
+USER $APP_UID
 ENTRYPOINT ["dotnet", "PrRag.DataGenerator.dll"]
