@@ -1,4 +1,3 @@
-using System.Text;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -11,21 +10,22 @@ namespace PrRag.Application.Services;
 
 public sealed class ChatService : IChatService
 {
-    private const string NoContextMessage =
-        "I don't have enough information in the purchase requisitions to answer that.";
-
     private readonly IChatClient _chatClient;
     private readonly IEmbeddingService _embeddingService;
-    private readonly IQueryRewriter _queryRewriter;
     private readonly IPurchaseRequisitionRepository _repository;
     private readonly IRagReportWriter _reportWriter;
     private readonly ILogger<ChatService> _logger;
     private readonly RagSettings _ragSettings;
 
+    private readonly Dictionary<string, AIFunction> _functions = new(StringComparer.Ordinal);
+    private readonly IList<AITool> _tools = new List<AITool>();
+
+    private int _activeTopK;
+    private double _activeMinSimilarity;
+
     public ChatService(
         IChatClient chatClient,
         IEmbeddingService embeddingService,
-        IQueryRewriter queryRewriter,
         IPurchaseRequisitionRepository repository,
         IRagReportWriter reportWriter,
         ILogger<ChatService> logger,
@@ -33,23 +33,22 @@ public sealed class ChatService : IChatService
     {
         _chatClient = chatClient;
         _embeddingService = embeddingService;
-        _queryRewriter = queryRewriter;
         _repository = repository;
         _reportWriter = reportWriter;
         _logger = logger;
         _ragSettings = ragSettings.Value;
+
+        RegisterFunction(
+            "search_by_codes",
+            "Search purchase requisitions by exact item codes (ITM-*) and/or supplier codes (SUP*). Returns matching requisitions with their supplier and item details.",
+            (IReadOnlyList<string>? items = null, IReadOnlyList<string>? suppliers = null, CancellationToken ct = default) =>
+                SearchByCodesAsync(items, suppliers, ct));
+
+        RegisterFunction(
+            "search_semantic",
+            "Search purchase requisitions by semantic similarity to the given query text, in any language. Returns the most relevant requisitions.",
+            (string query, CancellationToken ct) => SearchSemanticAsync(query, ct));
     }
-
-    private static readonly System.Text.RegularExpressions.Regex SupplierCodeRegex =
-        new(@"SUP\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    private static readonly System.Text.RegularExpressions.Regex ItemRegex =
-        new(@"ITM-\d+", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    private sealed record RetrievalContext(
-        List<Domain.PurchaseRequisition> Results,
-        Dictionary<string, double?> Similarities,
-        string? RewrittenQuery);
 
     public async Task<ChatResponse> AnswerAsync(
         ChatRequest request,
@@ -69,34 +68,22 @@ public sealed class ChatService : IChatService
             MinSimilarityFromRequest = minSimilarityFromRequest,
         };
 
-        var retrieval = await RetrieveContextAsync(request.Question, topK, minSimilarity, cancellationToken);
-        report.RewrittenQuery = retrieval.RewrittenQuery;
-        report.RetrievedCount = retrieval.Results.Count;
+        var messages = BuildConversation(request.Question, null);
+        var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
+        report.RetrievedCount = resolved.RetrievedItems.Count;
+        report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
 
-        ChatResponse response;
-        if (retrieval.Results.Count == 0)
-        {
-            report.UsedNoContextFallback = true;
-            response = new ChatResponse { Answer = NoContextMessage, RetrievedCount = 0 };
-        }
-        else
-        {
-            var prompt = BuildPrompt(request.Question, retrieval.Results);
-
-            var chatResponse = await _chatClient.GetResponseAsync(prompt, cancellationToken: cancellationToken);
-            response = new ChatResponse
-            {
-                Answer = chatResponse.Text,
-                RetrievedCount = retrieval.Results.Count,
-            };
-        }
-
-        report.Answer = response.Answer;
-        PopulateReport(report, retrieval, topK, minSimilarity);
+        var answer = resolved.FinalMessage.Text;
+        report.Answer = answer;
+        report.RetrievedItems = resolved.RetrievedItems;
 
         await WriteReportAsync(report, cancellationToken);
 
-        return response;
+        return new ChatResponse
+        {
+            Answer = answer,
+            RetrievedCount = resolved.RetrievedItems.Count,
+        };
     }
 
     public async IAsyncEnumerable<string> StreamAsync(
@@ -117,163 +104,163 @@ public sealed class ChatService : IChatService
             MinSimilarityFromRequest = minSimilarityFromRequest,
         };
 
-        var retrieval = await RetrieveContextAsync(request.Question, topK, minSimilarity, cancellationToken);
-        report.RewrittenQuery = retrieval.RewrittenQuery;
-        report.RetrievedCount = retrieval.Results.Count;
+        var messages = BuildConversation(request.Question, request.Messages);
+        var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
+        report.RetrievedCount = resolved.RetrievedItems.Count;
+        report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
 
-        if (retrieval.Results.Count == 0)
-        {
-            report.UsedNoContextFallback = true;
-            report.Answer = NoContextMessage;
-            yield return NoContextMessage;
+        var answer = resolved.FinalMessage.Text;
+        report.Answer = answer;
+        report.RetrievedItems = resolved.RetrievedItems;
 
-            await WriteReportAsync(report, cancellationToken);
-            yield break;
-        }
-
-        var messages = BuildStreamingMessages(request, retrieval.Results);
-
-        var answer = new StringBuilder();
-        var streaming = _chatClient.GetStreamingResponseAsync(messages, cancellationToken: cancellationToken);
-        await foreach (var update in streaming.WithCancellation(cancellationToken))
-        {
-            if (update.Text is { Length: > 0 } token)
-            {
-                answer.Append(token);
-                yield return token;
-            }
-        }
-
-        report.Answer = answer.ToString();
-        PopulateReport(report, retrieval, topK, minSimilarity);
+        yield return answer;
 
         await WriteReportAsync(report, cancellationToken);
     }
 
-    private async Task<RetrievalContext> RetrieveContextAsync(
-        string question,
+    private void RegisterFunction(
+        string name,
+        string description,
+        Delegate handler)
+    {
+        var function = AIFunctionFactory.Create(handler, new AIFunctionFactoryOptions
+        {
+            Name = name,
+            Description = description,
+            MarshalResult = (result, _, _) => new ValueTask<object?>(result),
+        });
+        _functions[name] = function;
+        _tools.Add(function);
+    }
+
+    private async Task<ResolvedContext> ResolveContextAsync(
+        List<ChatMessage> messages,
         int topK,
         double minSimilarity,
         CancellationToken cancellationToken)
     {
-        var items = ItemRegex.Matches(question)
-            .Select(m => m.Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
+        _activeTopK = topK;
+        _activeMinSimilarity = minSimilarity;
 
-        var supplierCodes = SupplierCodeRegex.Matches(question)
-            .Select(m => m.Value)
-            .Distinct(StringComparer.OrdinalIgnoreCase)
-            .ToList();
-
-        var results = new List<Domain.PurchaseRequisition>();
-        var seen = new HashSet<string>();
-        var similarities = new Dictionary<string, double?>(StringComparer.OrdinalIgnoreCase);
-
-        if (items.Count > 0 || supplierCodes.Count > 0)
+        var retrieved = new List<RagRetrievedItem>();
+        var options = new ChatOptions
         {
-            var byCodes = await _repository.SearchByCodesAsync(items, supplierCodes, topK, cancellationToken);
-            foreach (var r in byCodes)
+            Tools = _tools,
+            ToolMode = ChatToolMode.Auto,
+        };
+
+        while (true)
+        {
+            var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken);
+            var assistant = response.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
+            if (assistant is null)
             {
-                if (seen.Add(r.PurchaseRequisitionId))
+                break;
+            }
+
+            var calls = assistant.Contents
+                .OfType<FunctionCallContent>()
+                .Where(c => !c.InformationalOnly)
+                .ToList();
+
+            messages.Add(assistant);
+
+            if (calls.Count == 0)
+            {
+                return new ResolvedContext(assistant, retrieved);
+            }
+
+            foreach (var call in calls)
+            {
+                if (_functions.TryGetValue(call.Name, out var function))
                 {
-                    results.Add(r);
-                    similarities[r.PurchaseRequisitionId] = null;
+                    var result = await InvokeFunctionAsync(function, call, cancellationToken);
+                    if (result is IReadOnlyList<RagRetrievedItem> items)
+                    {
+                        retrieved.AddRange(items);
+                    }
+
+                    messages.Add(new ChatMessage(
+                        ChatRole.Tool,
+                        new List<AIContent> { new FunctionResultContent(call.CallId, result) }));
+                }
+                else
+                {
+                    messages.Add(new ChatMessage(
+                        ChatRole.Tool,
+                        new List<AIContent>
+                        {
+                            new FunctionResultContent(call.CallId, "Unknown tool. Use search_by_codes or search_semantic."),
+                        }));
                 }
             }
         }
 
-        string? rewrittenQuery = null;
-        if (results.Count < topK)
-        {
-            var optimizedQuery = await _queryRewriter.RewriteAsync(question, cancellationToken);
-            rewrittenQuery = optimizedQuery;
-
-            var questionEmbedding = await _embeddingService.GenerateAsync(optimizedQuery, cancellationToken);
-            var vectorResults = await _repository.SearchAsync(questionEmbedding, topK, minSimilarity, cancellationToken);
-            foreach (var result in vectorResults)
-            {
-                var r = result.Requisition;
-                if (seen.Add(r.PurchaseRequisitionId))
-                {
-                    results.Add(r);
-                    similarities[r.PurchaseRequisitionId] = result.Similarity;
-                }
-
-                if (results.Count >= topK)
-                {
-                    break;
-                }
-            }
-        }
-
-        return new RetrievalContext(results, similarities, rewrittenQuery);
+        var fallback = new ChatMessage(
+            ChatRole.Assistant,
+            "I don't have enough information to answer that.");
+        return new ResolvedContext(fallback, retrieved);
     }
 
-    private void PopulateReport(
-        RagQueryReport report,
-        RetrievalContext retrieval,
-        int topK,
-        double minSimilarity)
+    private async Task<object> InvokeFunctionAsync(
+        AIFunction function,
+        FunctionCallContent call,
+        CancellationToken cancellationToken)
     {
-        foreach (var r in retrieval.Results)
+        var arguments = new AIFunctionArguments();
+
+        if (call.Arguments is { Count: > 0 } args)
         {
-            report.RetrievedItems.Add(new RagRetrievedItem
+            foreach (var pair in args)
             {
-                PurchaseRequisitionId = r.PurchaseRequisitionId,
-                SupplierCode = r.SupplierCode,
-                SupplierName = r.SupplierName,
-                Item = r.Item,
-                ItemName = r.ItemName,
-                Description = r.Description,
-                Similarity = retrieval.Similarities.TryGetValue(r.PurchaseRequisitionId, out var sim) ? sim : null,
-            });
+                arguments[pair.Key] = pair.Value;
+            }
         }
+
+        return (await function.InvokeAsync(arguments, cancellationToken)) ?? string.Empty;
     }
 
-    private List<ChatMessage> BuildStreamingMessages(ChatStreamRequest request, IReadOnlyList<Domain.PurchaseRequisition> results)
+    private async Task<IReadOnlyList<RagRetrievedItem>> SearchByCodesAsync(
+        IReadOnlyList<string>? items,
+        IReadOnlyList<string>? suppliers,
+        CancellationToken cancellationToken)
+    {
+        var results = await _repository.SearchByCodesAsync(items, suppliers, _activeTopK, cancellationToken);
+        return results.Select(r => RagRetrievedItem.From(r, null)).ToList();
+    }
+
+    private async Task<IReadOnlyList<RagRetrievedItem>> SearchSemanticAsync(
+        string query,
+        CancellationToken cancellationToken)
+    {
+        var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
+        var results = await _repository.SearchAsync(embedding, _activeTopK, _activeMinSimilarity, cancellationToken);
+        return results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
+    }
+
+    private List<ChatMessage> BuildConversation(string question, IReadOnlyList<ChatMessageDto>? history)
     {
         var messages = new List<ChatMessage>
         {
-            new(ChatRole.System, BuildSystemPrompt(results)),
+            new(ChatRole.System, SystemPrompt),
         };
 
-        foreach (var msg in request.Messages)
+        if (history is not null)
         {
-            var role = string.Equals(msg.Role, "assistant", StringComparison.OrdinalIgnoreCase)
-                ? ChatRole.Assistant
-                : ChatRole.User;
-            messages.Add(new ChatMessage(role, msg.Content));
+            foreach (var msg in history)
+            {
+                var role = string.Equals(msg.Role, "assistant", StringComparison.OrdinalIgnoreCase)
+                    ? ChatRole.Assistant
+                    : ChatRole.User;
+                if (role == ChatRole.Assistant || role == ChatRole.User)
+                {
+                    messages.Add(new ChatMessage(role, msg.Content));
+                }
+            }
         }
 
-        messages.Add(new ChatMessage(ChatRole.User, request.Question));
+        messages.Add(new ChatMessage(ChatRole.User, question));
         return messages;
-    }
-
-    private static string BuildSystemPrompt(IReadOnlyList<Domain.PurchaseRequisition> results)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine("You are a helpful assistant answering questions about purchase requisitions.");
-        sb.AppendLine("Use only the provided context to answer. If the context does not contain the answer, say so.");
-        sb.AppendLine();
-        sb.AppendLine("Context (purchase requisitions):");
-        sb.AppendLine();
-
-        foreach (var r in results)
-        {
-            sb.AppendLine($"- {r.PurchaseRequisitionId} | Supplier Code: {r.SupplierCode} | Supplier Name: {r.SupplierName} | Item: {r.Item} | Item Name: {r.ItemName} | Description: {r.Description}");
-        }
-
-        return sb.ToString();
-    }
-
-    private static string BuildPrompt(string question, IReadOnlyList<Domain.PurchaseRequisition> results)
-    {
-        var sb = new StringBuilder();
-        sb.AppendLine(BuildSystemPrompt(results));
-        sb.AppendLine();
-        sb.AppendLine($"Question: {question}");
-        return sb.ToString();
     }
 
     private async Task WriteReportAsync(RagQueryReport report, CancellationToken cancellationToken)
@@ -287,4 +274,19 @@ public sealed class ChatService : IChatService
             _logger.LogError(ex, "Failed to write RAG observability report");
         }
     }
+
+    private const string SystemPrompt =
+        """
+        You are a helpful assistant answering questions about purchase requisitions.
+        You have two tools available:
+        - search_by_codes: use it when the user references exact ITM-* item codes or SUP* supplier codes.
+        - search_semantic: use it when the user asks about requisitions by meaning or description.
+        Decide whether a tool is needed for the current question. If you use a tool, ground your
+        answer on its results. If prior conversation turns already contain the needed context,
+        you may rely on that instead of calling a tool again. Answer in the same language as the user.
+        """;
+
+    private sealed record ResolvedContext(
+        ChatMessage FinalMessage,
+        List<RagRetrievedItem> RetrievedItems);
 }

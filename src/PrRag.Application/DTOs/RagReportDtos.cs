@@ -1,3 +1,5 @@
+using PrRag.Application.Domain;
+
 namespace PrRag.Application.DTOs;
 
 public readonly record struct RequisitionSearchResult(
@@ -44,4 +46,15 @@ public sealed class RagRetrievedItem
     public string Description { get; set; } = string.Empty;
 
     public double? Similarity { get; set; }
+
+    public static RagRetrievedItem From(PurchaseRequisition r, double? similarity) => new()
+    {
+        PurchaseRequisitionId = r.PurchaseRequisitionId,
+        SupplierCode = r.SupplierCode,
+        SupplierName = r.SupplierName,
+        Item = r.Item,
+        ItemName = r.ItemName,
+        Description = r.Description,
+        Similarity = similarity,
+    };
 }

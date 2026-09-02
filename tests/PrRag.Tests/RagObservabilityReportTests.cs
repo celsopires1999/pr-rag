@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
@@ -84,6 +85,12 @@ public class RagObservabilityReportTests : IAsyncLifetime
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            "search_semantic",
+            new Dictionary<string, object?> { ["query"] = "acme hydraulic pump" });
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -101,25 +108,6 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.True(report.MinSimilarityFromRequest);
         Assert.True(report.RetrievedCount > 0);
         Assert.Equal(response.Answer, report.Answer);
-    }
-
-    [Fact]
-    public async Task Report_records_rewritten_query()
-    {
-        using var scope = _provider!.CreateScope();
-        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
-
-        await chat.AnswerAsync(new ChatRequest
-        {
-            Question = "acme hydraulic pump",
-            TopK = 5,
-            MinSimilarity = 0.01,
-        });
-
-        var report = await ReadLastReportAsync(ReportsDir);
-
-        Assert.Contains("optimized:", report.RewrittenQuery);
-        Assert.Equal("optimized: acme hydraulic pump", report.RewrittenQuery);
     }
 
     [Fact]

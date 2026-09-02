@@ -7,31 +7,31 @@ Natural-language Q&A over purchase requisitions, answering questions grounded in
 ## Requirements
 
 ### Requirement: Chat over purchase requisitions
-The system SHALL accept a natural-language question and return an answer grounded in purchased-requisition context retrieved via vector similarity search over embeddings, using the configured embedding and chat models. When the exact code-based search does not fill the configured retrieval depth, the system SHALL rewrite the question into an optimized English query before embedding, and SHALL use the original question in the final answer prompt.
+The system SHALL accept a natural-language question and return an answer grounded in purchase-requisition context retrieved by the chat model via tool calls against PostgreSQL, using the configured embedding and chat models. The model SHALL decide whether to invoke a retrieval tool and which one, rather than the pipeline forcing retrieval on every question.
 
 #### Scenario: Successful grounded answer
 - **WHEN** a client sends `POST /api/chat` with a question and valid `top_k`/`min_similarity`
-- **THEN** the system acquires the rewritten query, embeds the rewritten query, retrieves the top relevant requisitions above the similarity threshold, and returns an OpenAI-generated answer citing the retrieved context
+- **THEN** the system lets the chat model choose whether to call a PostgreSQL retrieval tool, resolves any tool results, and returns an OpenAI-generated answer grounded in the retrieved context
+
+#### Scenario: Exact lookup via tool
+- **WHEN** the model calls the exact-match lookup tool for `ITM-*`/`SUP*` codes
+- **THEN** the system returns the matching requisitions to the model and grounds the answer on them
+
+#### Scenario: Semantic search via tool
+- **WHEN** the model calls the semantic search tool
+- **THEN** the system embeds the search text and returns the requisitions above the similarity threshold to the model
 
 #### Scenario: Configurable retrieval depth
 - **WHEN** the client provides a `top_k` value
-- **THEN** the system retrieves at most that many requisitions for context
+- **THEN** the semantic search tool retrieves at most that many requisitions for context
 
 #### Scenario: Configurable relevance threshold
 - **WHEN** the client provides a `min_similarity` value
 - **THEN** the system discards retrieved requisitions with similarity below that threshold
 
 #### Scenario: No relevant context found
-- **WHEN** the vector search returns no requisitions meeting the similarity threshold for the rewritten question
+- **WHEN** the model performs retrieval that returns no requisitions meeting the requirements for the question
 - **THEN** the system responds with a message stating it does not have enough information in the purchase requisitions to answer
-
-#### Scenario: Rewriter runs only when vector search is needed
-- **WHEN** the exact code-based search already returns a number of requisitions equal to or greater than `top_k`
-- **THEN** the system skips the query rewriter and vector search
-
-#### Scenario: Original question used for final answer
-- **WHEN** a vector search is performed using a rewritten query
-- **THEN** the system still builds the final answer prompt using the original user question
 
 ### Requirement: RAG controls configured via environment
 The system SHALL expose the embedding model, chat model, and default retrieval parameters through `IConfiguration`/environment, and SHALL use environment-provided API key without committing it.

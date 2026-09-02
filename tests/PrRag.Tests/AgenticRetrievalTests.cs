@@ -1,14 +1,13 @@
 using System.Text.Json;
-using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
-using PrRag.Infrastructure.Persistence;
 using Xunit;
 
 namespace PrRag.Tests;
 
-public class QueryRewriterRetrievalTests : IAsyncLifetime
+public class AgenticRetrievalTests : IAsyncLifetime
 {
     private static string ConnectionTemplate =>
         Environment.GetEnvironmentVariable("TEST_CONNECTION_STRING")
@@ -69,57 +68,106 @@ public class QueryRewriterRetrievalTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Rewriter_runs_when_vector_search_is_needed()
-    {
-        using var scope = _provider!.CreateScope();
-        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
-        var rewriter = scope.ServiceProvider.GetRequiredService<FakeQueryRewriter>();
-
-        await chat.AnswerAsync(new ChatRequest
-        {
-            Question = "acme hydraulic pump",
-            TopK = 5,
-            MinSimilarity = 0,
-        });
-
-        Assert.True(rewriter.CallCount > 0);
-        Assert.Equal("acme hydraulic pump", rewriter.LastQuestion);
-    }
-
-    [Fact]
-    public async Task Rewriter_skipped_when_codes_fill_topK()
-    {
-        using var scope = _provider!.CreateScope();
-        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
-        var rewriter = scope.ServiceProvider.GetRequiredService<FakeQueryRewriter>();
-
-        var response = await chat.AnswerAsync(new ChatRequest
-        {
-            Question = "SUP000001 SUP000002",
-            TopK = 2,
-            MinSimilarity = 0,
-        });
-
-        Assert.Equal(0, rewriter.CallCount);
-        Assert.Equal(2, response.RetrievedCount);
-    }
-
-    [Fact]
-    public async Task Original_question_used_for_final_answer()
+    public async Task Model_calls_exact_match_tool_and_answer_is_grounded()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        var original = "acme hydraulic pump requisitions";
-        await chat.AnswerAsync(new ChatRequest
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            "search_by_codes",
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+
+        var response = await chat.AnswerAsync(new ChatRequest
         {
-            Question = original,
+            Question = "what is requisition from supplier SUP000001?",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        Assert.Equal(1, response.RetrievedCount);
+        Assert.NotEmpty(response.Answer);
+        Assert.Contains("SUP000001", chatClient.LastPrompt);
+    }
+
+    [Fact]
+    public async Task Model_calls_semantic_tool_and_answer_is_grounded_above_threshold()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            "search_semantic",
+            new Dictionary<string, object?> { ["query"] = "hydraulic pump" });
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "tell me about the hydraulic pump",
             TopK = 5,
             MinSimilarity = 0.01,
         });
 
-        Assert.Contains(original, chatClient.LastPrompt);
+        Assert.True(response.RetrievedCount > 0);
+        Assert.NotEmpty(response.Answer);
+    }
+
+    [Fact]
+    public async Task Model_answers_without_retrieval()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ToolCall = null;
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "hello, how are you?",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        Assert.Equal(0, response.RetrievedCount);
+        Assert.Equal(1, chatClient.CallCount);
+    }
+
+    [Fact]
+    public async Task Full_history_carried_across_turns()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            "search_by_codes",
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000002" } });
+
+        var streamed = new List<string>();
+        await foreach (var token in chat.StreamAsync(new ChatStreamRequest
+        {
+            Question = "give me details on SUP000002",
+            TopK = 5,
+            MinSimilarity = 0,
+            Messages = new List<ChatMessageDto>
+            {
+                new() { Role = "user", Content = "I need info about Beta Components." },
+                new() { Role = "assistant", Content = "I will fetch that supplier." },
+            },
+        }))
+        {
+            streamed.Add(token);
+        }
+
+        Assert.NotEmpty(streamed);
+
+        var messages = chatClient.LastMessages;
+        Assert.Contains(messages, m => m.Role == ChatRole.Tool);
+        Assert.Contains(messages, m => m.Text == "I need info about Beta Components.");
+        Assert.Contains(messages, m => m.Role == ChatRole.Assistant && m.Text == "I will fetch that supplier.");
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)
