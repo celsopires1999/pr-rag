@@ -13,6 +13,7 @@ public sealed class ChatService : IChatService
     private readonly IChatClient _chatClient;
     private readonly IEmbeddingService _embeddingService;
     private readonly IPurchaseRequisitionRepository _repository;
+    private readonly IQueryRewriter _queryRewriter;
     private readonly IRagReportWriter _reportWriter;
     private readonly ILogger<ChatService> _logger;
     private readonly RagSettings _ragSettings;
@@ -22,11 +23,14 @@ public sealed class ChatService : IChatService
 
     private int _activeTopK;
     private double _activeMinSimilarity;
+    private string? _activeRewrittenQuery;
+    private IReadOnlyList<ChatMessage> _conversation = Array.Empty<ChatMessage>();
 
     public ChatService(
         IChatClient chatClient,
         IEmbeddingService embeddingService,
         IPurchaseRequisitionRepository repository,
+        IQueryRewriter queryRewriter,
         IRagReportWriter reportWriter,
         ILogger<ChatService> logger,
         IOptions<RagSettings> ragSettings)
@@ -34,6 +38,7 @@ public sealed class ChatService : IChatService
         _chatClient = chatClient;
         _embeddingService = embeddingService;
         _repository = repository;
+        _queryRewriter = queryRewriter;
         _reportWriter = reportWriter;
         _logger = logger;
         _ragSettings = ragSettings.Value;
@@ -72,6 +77,7 @@ public sealed class ChatService : IChatService
         var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
         report.RetrievedCount = resolved.RetrievedItems.Count;
         report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
+        report.RewrittenQuery = _activeRewrittenQuery;
 
         var answer = resolved.FinalMessage.Text;
         report.Answer = answer;
@@ -108,6 +114,7 @@ public sealed class ChatService : IChatService
         var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
         report.RetrievedCount = resolved.RetrievedItems.Count;
         report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
+        report.RewrittenQuery = _activeRewrittenQuery;
 
         var answer = resolved.FinalMessage.Text;
         report.Answer = answer;
@@ -141,6 +148,8 @@ public sealed class ChatService : IChatService
     {
         _activeTopK = topK;
         _activeMinSimilarity = minSimilarity;
+        _activeRewrittenQuery = null;
+        _conversation = messages;
 
         var retrieved = new List<RagRetrievedItem>();
         var options = new ChatOptions
@@ -233,7 +242,10 @@ public sealed class ChatService : IChatService
         string query,
         CancellationToken cancellationToken)
     {
-        var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
+        var optimizedQuery = await _queryRewriter.RewriteAsync(query, _conversation, cancellationToken);
+        _activeRewrittenQuery = optimizedQuery;
+
+        var embedding = await _embeddingService.GenerateAsync(optimizedQuery, cancellationToken);
         var results = await _repository.SearchAsync(embedding, _activeTopK, _activeMinSimilarity, cancellationToken);
         return results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
     }

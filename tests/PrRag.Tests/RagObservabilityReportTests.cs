@@ -108,6 +108,7 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.True(report.MinSimilarityFromRequest);
         Assert.True(report.RetrievedCount > 0);
         Assert.Equal(response.Answer, report.Answer);
+        Assert.Equal("optimized: acme hydraulic pump", report.RewrittenQuery);
     }
 
     [Fact]

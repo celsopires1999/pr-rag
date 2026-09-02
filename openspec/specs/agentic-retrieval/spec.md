@@ -15,7 +15,11 @@ The system SHALL expose the PostgreSQL lookup operations as tool functions the c
 
 #### Scenario: Model calls the semantic search tool
 - **WHEN** the model determines a question is best answered by semantic similarity
-- **THEN** the system embeds the search text, runs a vector similarity search over requisition embeddings, and returns the ranked results above the configured similarity threshold to the model
+- **THEN** the system rewrites the search text using the full conversation context, embeds the rewritten query, runs a vector similarity search over requisition embeddings, and returns the ranked results above the configured similarity threshold to the model
+
+#### Scenario: Exact-match tool bypasses semantic rewriting
+- **WHEN** the model calls the exact-match lookup tool
+- **THEN** the system executes the code-based search without invoking the semantic query rewriter
 
 #### Scenario: Model answers without retrieval
 - **WHEN** the model decides a question does not require PostgreSQL context
