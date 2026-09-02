@@ -50,13 +50,14 @@ public static class IntegrationServiceFactory
         services.AddDbContext<PrRagDbContext>(options =>
             options.UseNpgsql(dataSource, npgsql => npgsql.UseVector()));
 
+        services.AddApplication();
+
         services.AddSingleton<IEmbeddingService>(embeddingService);
         services.AddSingleton(rewriter);
         services.AddSingleton<IQueryRewriter>(rewriter);
         services.AddSingleton(chatClient);
         services.AddSingleton<IChatClient>(chatClient);
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
-        services.AddApplication();
 
         var provider = services.BuildServiceProvider();
         return (provider, embeddingService, dataDir);

@@ -60,6 +60,7 @@ The API enables cross-origin access from the origins in `Cors__AllowedOrigins` (
 ## Tests
 
 - Integration tests use `TEST_CONNECTION_STRING` env var (set by compose or manually).
+- When `TEST_CONNECTION_STRING` is unset, `TestDatabase.ConnectionStringTemplate` falls back to a sensible host: `Host=db` when running inside the DevContainer (detected via `REMOTE_CONTAINERS` env or the presence of `/.dockerenv`/`/workspaces`), otherwise `Host=localhost`. This lets the VS Code test extension run the tests inside the DevContainer with no manual env setup — it connects to the compose `db` service instead of failing on `localhost`.
 - Tests run at container runtime (`ENTRYPOINT dotnet test`), not build time — this is because the `db` service isn't available during image build.
 - Test fakes: `FakeChatClient`, `FakeEmbeddingService`, `FakeQueryRewriter` — no real OpenAI calls during tests.
 - Coverage: ingestion diff (initial, no-change, changed/new rows), query rewriter retrieval, RAG observability report.

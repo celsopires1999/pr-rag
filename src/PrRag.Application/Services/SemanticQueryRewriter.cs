@@ -2,9 +2,9 @@ using System.Text;
 using Microsoft.Extensions.AI;
 using PrRag.Application.Abstractions;
 
-namespace PrRag.Infrastructure.Services;
+namespace PrRag.Application.Services;
 
-public sealed class OpenAiQueryRewriter : IQueryRewriter
+public sealed class SemanticQueryRewriter : IQueryRewriter
 {
     private const string SystemPrompt =
         """
@@ -51,7 +51,7 @@ public sealed class OpenAiQueryRewriter : IQueryRewriter
 
     private readonly IChatClient _chatClient;
 
-    public OpenAiQueryRewriter(IChatClient chatClient)
+    public SemanticQueryRewriter(IChatClient chatClient)
     {
         _chatClient = chatClient;
     }

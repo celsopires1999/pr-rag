@@ -7,6 +7,25 @@ namespace PrRag.Tests;
 
 internal static class TestDatabase
 {
+    private const string LocalHostTemplate = "Host=localhost;Port=5432;Username=prrag;Password=prrag";
+    private const string DevContainerHostTemplate = "Host=db;Port=5432;Username=prrag;Password=prrag";
+
+    /// <summary>
+    /// Returns the connection-string template (without a database) to use for
+    /// integration tests. Honors TEST_CONNECTION_STRING when set; otherwise falls
+    /// back to the Postgres host that is reachable from the current environment.
+    /// When running inside the DevContainer (VS Code Dev Containers) the database
+    /// is the compose "db" service, reachable on host "db", not localhost.
+    /// </summary>
+    public static string ConnectionStringTemplate =>
+        Environment.GetEnvironmentVariable("TEST_CONNECTION_STRING")
+        ?? (IsInsideDevContainer ? DevContainerHostTemplate : LocalHostTemplate);
+
+    private static bool IsInsideDevContainer =>
+        Environment.GetEnvironmentVariable("REMOTE_CONTAINERS")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
+        || Directory.Exists("/.dockerenv")
+        || Directory.Exists("/workspaces");
+
     /// <summary>
     /// Applies migrations and reloads Npgsql's type info on the EF connection.
     /// Migrating a freshly created database runs CREATE EXTENSION vector; the

@@ -9,9 +9,7 @@ namespace PrRag.Tests;
 
 public class AgenticRetrievalTests : IAsyncLifetime
 {
-    private static string ConnectionTemplate =>
-        Environment.GetEnvironmentVariable("TEST_CONNECTION_STRING")
-            ?? "Host=localhost;Port=5432;Username=prrag;Password=prrag";
+    private static string ConnectionTemplate => TestDatabase.ConnectionStringTemplate;
 
     private readonly string _dbName = $"prrag_test_{Guid.NewGuid():N}";
     private string _connectionString = null!;

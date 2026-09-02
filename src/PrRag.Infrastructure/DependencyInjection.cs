@@ -44,7 +44,6 @@ public static class DependencyInjection
 
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
         services.AddScoped<IEmbeddingService, OpenAiEmbeddingService>();
-        services.AddScoped<IQueryRewriter, OpenAiQueryRewriter>();
         services.AddSingleton<IRagReportWriter, FileRagReportWriter>();
 
         services.AddHostedService<FileWatcherService>();

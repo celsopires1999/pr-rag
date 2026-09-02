@@ -38,3 +38,14 @@ The system SHALL propagate a query-rewriter failure as a request error rather th
 #### Scenario: Rewriter call fails
 - **WHEN** the rewriter LLM call times out or returns an error
 - **THEN** the request fails and reports the error
+
+### Requirement: Rewriter implementation lives in the Application layer
+The system SHALL implement the query rewriter as provider-agnostic logic within the Application layer, consuming an `IChatClient` abstraction rather than an OpenAI-specific SDK, so the Application owns the pure LLM-backed behavior.
+
+#### Scenario: Rewriter resolves from the Application layer
+- **WHEN** the service container resolves an `IQueryRewriter`
+- **THEN** it resolves the concrete `SemanticQueryRewriter` implementation registered by the Application layer
+
+#### Scenario: Rewriter uses a provider-agnostic client
+- **WHEN** the rewriter performs its rewrite call
+- **THEN** it does so through the `IChatClient` abstraction, with no direct dependency on the OpenAI SDK

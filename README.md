@@ -303,6 +303,8 @@ TEST_CONNECTION_STRING="Host=localhost;Port=5432;Username=prrag;Password=prrag" 
   dotnet test tests/PrRag.Tests
 ```
 
+> `TEST_CONNECTION_STRING` is optional. When it is not set, `TestDatabase.ConnectionStringTemplate` picks a sensible host automatically: inside the DevContainer it targets the compose `db` service (`Host=db`) so the tests connect without any manual setup (this is what the VS Code test extension uses); on the host it falls back to `Host=localhost`.
+
 Covered scenarios:
 - Initial import embeds all rows.
 - Re-import with no changes does **not** re-embed.
@@ -413,6 +415,8 @@ Tests run against the `db` service from the compose stack. From the container, e
 ```bash
 dotnet test tests/PrRag.Tests
 ```
+
+No `TEST_CONNECTION_STRING` is needed here: when unset, the tests fall back to `Host=db` (the compose `db` service, reachable from inside the DevContainer) automatically.
 
 or, to run them via the dedicated test container (no `dotnet` on the host), from the repository root on the host:
 
