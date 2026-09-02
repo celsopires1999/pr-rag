@@ -51,6 +51,11 @@ The API enables cross-origin access from the origins in `Cors__AllowedOrigins` (
 - **Settings use `__` separator** in `.env` (e.g. `OpenAI__ApiKey`) — these are the same `.NET` config keys the app reads. No duplication.
 - **EF Core migrations auto-apply on API startup.** No manual step needed. To create explicit migrations: `dotnet ef migrations add <Name> --project src/PrRag.Infrastructure/PrRag.Infrastructure.csproj`.
 - **CORS is config-driven**: `Cors__AllowedOrigins` (default `http://localhost:5173`) controls what origins may call the API from the browser. Add origins (comma-separated) if the front-end is served elsewhere.
+- **DevContainer build owner**: The `devcontainer` service runs as `root` by default, but `devcontainer.json` sets `"remoteUser": "vscode"`. Running `dotnet build` as `root` inside the container writes `obj/`/`bin/` artifacts owned by `root`; a subsequent VS Code build (as `vscode`) fails with `Permission denied` writing `.cache` files. Always build as `vscode` (e.g. `docker compose exec -u vscode devcontainer dotnet build ...` or the VS Code `build` task). If a root-owned build breaks things, remove all `bin`/`obj` as root first, then rebuild as `vscode`:
+  ```sh
+  docker compose exec -u root devcontainer sh -c 'find /workspaces/src /workspaces/tests /workspaces/tools -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +'
+  docker compose exec -u vscode -w /workspaces devcontainer dotnet build /workspaces/PrRag.sln -c Debug
+  ```
 
 ## Tests
 
