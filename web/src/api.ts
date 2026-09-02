@@ -79,6 +79,7 @@ export async function chatStream(
   const decoder = new TextDecoder()
   let buffer = ''
   let fullText = ''
+  let pendingData: string | null = null
 
   while (true) {
     const { done, value } = await reader.read()
@@ -89,18 +90,39 @@ export async function chatStream(
     buffer = lines.pop() ?? ''
 
     for (const line of lines) {
+      if (line === '') {
+        // Event boundary — flush accumulated multiline data
+        if (pendingData !== null) {
+          fullText += pendingData
+          onToken(pendingData)
+          pendingData = null
+        }
+        continue
+      }
+
       const idx = line.indexOf('data:')
       if (idx === -1) continue
-      // payload = tudo após "data:"; remove apenas o espaço do separador SSE,
-      // preservando espaços de prefixo legítimos dos tokens (ex.: " Olá,")
+
       const raw = line.slice(idx + 5)
       const data = raw.startsWith(' ') ? raw.slice(1) : raw
-      if (data === '[DONE]') return fullText
-      if (data) {
-        fullText += data
-        onToken(data)
+
+      if (data === '[DONE]') {
+        if (pendingData !== null) {
+          fullText += pendingData
+          onToken(pendingData)
+        }
+        return fullText
       }
+
+      // SSE spec: multiple data: lines in one event are joined with \n
+      pendingData = pendingData !== null ? pendingData + '\n' + data : data
     }
+  }
+
+  // Flush any remaining data if [DONE] was not received
+  if (pendingData !== null) {
+    fullText += pendingData
+    onToken(pendingData)
   }
 
   return fullText

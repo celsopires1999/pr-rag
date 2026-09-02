@@ -6,9 +6,15 @@
   "service": "devcontainer",
   "workspaceFolder": "/workspaces",
   "forwardPorts": [
-    8080
+    8080,
+    5173
   ],
   "remoteUser": "vscode",
+  "features": {
+    "ghcr.io/devcontainers/features/node:1": {
+      "version": "22"
+    }
+  },
   "customizations": {
     "vscode": {
       "extensions": [
@@ -17,7 +23,9 @@
         "ms-dotnettools.vscode-dotnet-runtime",
         "ms-azuretools.vscode-docker",
         "cweijan.vscode-postgresql-client2",
-        "EditorConfig.EditorConfig"
+        "EditorConfig.EditorConfig",
+        "bradlc.vscode-tailwindcss",
+        "dbaeumer.vscode-eslint"
       ]
     }
   }

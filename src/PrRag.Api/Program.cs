@@ -78,7 +78,11 @@ app.MapPost("/api/chat/stream", async (
     {
         await foreach (var token in chatService.StreamAsync(request, ct))
         {
-            await httpContext.Response.WriteAsync($"data: {token}\n\n", ct);
+            foreach (var line in token.Split('\n'))
+            {
+                await httpContext.Response.WriteAsync($"data: {line}\n", ct);
+            }
+            await httpContext.Response.WriteAsync("\n", ct);
             await httpContext.Response.Body.FlushAsync(ct);
         }
 

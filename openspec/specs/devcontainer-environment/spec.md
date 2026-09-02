@@ -25,7 +25,7 @@ The development environment SHALL reuse the existing `pgvector` database service
 - **THEN** it connects to the same PostgreSQL/pgvector service used by the application, and the app developer can reach it when launching the API locally in the container
 
 ### Requirement: Recommended extensions auto-installed
-The development environment SHALL define and auto-install the recommended VS Code extensions (C#, Docker, PostgreSQL, etc.) when the DevContainer is opened.
+The development environment SHALL define and auto-install the recommended VS Code extensions (C#, Docker, PostgreSQL, Tailwind CSS, ESLint/oxlint, etc.) when the DevContainer is opened.
 
 #### Scenario: Extensions installed on startup
 - **WHEN** a developer opens the DevContainer

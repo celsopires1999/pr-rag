@@ -3,6 +3,7 @@ import { Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
+import { MarkdownRenderer } from '@/components/ui/markdown-renderer'
 import { ThinkingIndicator } from '@/components/ThinkingIndicator'
 import { chatStream } from '@/api'
 import { useRagSettings } from '@/context/RagSettingsContext'
@@ -105,8 +106,14 @@ export function ChatPage() {
                     : 'bg-muted',
                 )}
               >
-                <CardContent className="whitespace-pre-wrap px-4 py-3 text-sm leading-relaxed">
-                  {streaming && !m.content ? <ThinkingIndicator /> : m.content}
+                <CardContent className="px-4 py-3 text-sm leading-relaxed">
+                  {streaming && !m.content ? (
+                    <ThinkingIndicator />
+                  ) : m.role === 'assistant' ? (
+                    <MarkdownRenderer content={m.content} />
+                  ) : (
+                    <span className="whitespace-pre-wrap">{m.content}</span>
+                  )}
                 </CardContent>
               </Card>
             </div>
