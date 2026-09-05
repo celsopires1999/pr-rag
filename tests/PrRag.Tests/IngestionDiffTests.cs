@@ -32,6 +32,7 @@ public class IngestionDiffTests : IAsyncLifetime
         if (_provider is not null)
         {
             await _provider.DisposeAsync();
+            await TestDatabase.DropDatabaseAsync(_dbName);
         }
 
         if (!string.IsNullOrEmpty(_dataDir) && Directory.Exists(_dataDir))

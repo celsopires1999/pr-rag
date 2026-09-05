@@ -50,4 +50,23 @@ internal static class TestDatabase
 
         await connection.ReloadTypesAsync(cancellationToken);
     }
+
+    /// <summary>
+    /// Drops a test database created for a test run. Connects through the same
+    /// reachable-host template used to create the database (TEST_CONNECTION_STRING,
+    /// DevContainer "db", or localhost). Uses DROP DATABASE ... WITH (FORCE) so any
+    /// pooled idle connections left by Npgsql do not block the drop.
+    /// </summary>
+    public static async Task DropDatabaseAsync(
+        string dbName,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(ConnectionStringTemplate);
+        await connection.OpenAsync(cancellationToken);
+
+        var quoted = $"\"{dbName.Replace("\"", "\"\"")}\"";
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"DROP DATABASE IF EXISTS {quoted} WITH (FORCE)";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
 }
