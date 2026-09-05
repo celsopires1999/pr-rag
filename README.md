@@ -107,9 +107,9 @@ Generate the purchase requisitions JSON into the bind-mounted `./data` folder:
 docker compose --profile tools run --rm datagen /data/purchase.json
 ```
 
-> The generator is a small console project (`tools/PrRag.DataGenerator`). You can build/run it directly with the .NET 10 SDK if you have it:
+> The generator is a small console project (`backend/tools/PrRag.DataGenerator`). You can build/run it directly with the .NET 10 SDK if you have it:
 > ```bash
-> dotnet run --project tools/PrRag.DataGenerator -- data/purchase.json
+> dotnet run --project backend/tools/PrRag.DataGenerator -- data/purchase.json
 > ```
 
 The API watches `data/purchase.json` and ingests it automatically. You can also trigger ingestion manually (see below).
@@ -119,12 +119,12 @@ The API watches `data/purchase.json` and ingests it automatically. You can also 
 The same UI can be run in **development mode** (Vite dev server with HMR) instead of the container:
 
 ```bash
-cd web
+cd frontend
 npm install
 npm run dev        # serves http://localhost:5173
 ```
 
-In dev mode the front-end targets `http://localhost:8080` by default (the API). If your API runs elsewhere, set the base URL via `VITE_API_BASE_URL` in `web/.env.local`:
+In dev mode the front-end targets `http://localhost:8080` by default (the API). If your API runs elsewhere, set the base URL via `VITE_API_BASE_URL` in `frontend/.env.local`:
 
 ```bash
 VITE_API_BASE_URL=http://localhost:8080
@@ -134,13 +134,13 @@ The API must allow your browser's origin — the default `CORS__AllowedOrigins=h
 
 ## Web front-end
 
-`web/` is a Vite + React + TypeScript single-page UI with a persistent left sidebar and routed pages:
+`frontend/` is a Vite + React + TypeScript single-page UI with a persistent left sidebar and routed pages:
 
 - **Chat** (default page) — ChatGPT-style: a scrollable message list with user/assistant bubbles and a bottom input. Answers **stream** in as tokens arrive (SSE via `/api/chat/stream`), and **multi-turn history** is sent so follow-up questions have context.
 - **Sidebar** — navigation links (Chat / Status), editable RAG parameters (`top_k`, `min_similarity`, shared with the Chat page via a `RagSettingsContext`), and a manual **ingest** button.
 - **Status** — auto-refreshing requisition/embedded counts and last sync (get via `/api/status`).
 
-It talks to the API endpoints in [`src/PrRag.Api/Program.cs`](src/PrRag.Api/Program.cs); the client types mirror the .NET DTOs in `web/src/types.ts` and calls live in `web/src/api.ts`.
+It talks to the API endpoints in [`src/PrRag.Api/Program.cs`](backend/src/PrRag.Api/Program.cs); the client types mirror the .NET DTOs in `frontend/src/types.ts` and calls live in `frontend/src/api.ts`.
 
 ## API
 
@@ -300,7 +300,7 @@ Or run directly with the .NET 10 SDK (requires a reachable Postgres):
 
 ```bash
 TEST_CONNECTION_STRING="Host=localhost;Port=5432;Username=prrag;Password=prrag" \
-  dotnet test tests/PrRag.Tests
+  dotnet test backend/tests/PrRag.Tests
 ```
 
 > `TEST_CONNECTION_STRING` is optional. When it is not set, `TestDatabase.ConnectionStringTemplate` picks a sensible host automatically: inside the DevContainer it targets the compose `db` service (`Host=db`) so the tests connect without any manual setup (this is what the VS Code test extension uses); on the host it falls back to `Host=localhost`.
@@ -356,6 +356,7 @@ Changes to `.env` are picked up by relaunching the API from VS Code (the debug/t
 Inside the container a normal `dotnet` workflow works:
 
 ```bash
+cd backend
 dotnet restore PrRag.sln     # restore packages
 dotnet build PrRag.sln       # build the solution
 dotnet run --project src/PrRag.Api   # run the API
@@ -364,7 +365,7 @@ dotnet test tests/PrRag.Tests        # run the tests
 
 Or use the pre-configured VS Code tasks (all run the in-container SDK):
 
-- **Build** — `Ctrl/Cmd+Shift+B` (`dotnet build PrRag.sln`).
+- **Build** — `Ctrl/Cmd+Shift+B` (`dotnet build backend/PrRag.sln`).
 - **Watch** — Terminal → **Run Task…** → `build`/`watch` to rebuild on change and run `dotnet watch`.
 - **Test** — Terminal → **Run Task…** → `test` to run the test suite.
 
@@ -413,6 +414,7 @@ curl -X POST http://localhost:8080/api/ingest
 Tests run against the `db` service from the compose stack. From the container, either:
 
 ```bash
+cd backend
 dotnet test tests/PrRag.Tests
 ```
 
@@ -436,25 +438,27 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test u
 ## Project structure
 
 ```
-PrRag.sln
+backend/
+├── PrRag.sln
 ├── src/
 │   ├── PrRag.Application/      # domain, DTOs, service interfaces + logic
 │   ├── PrRag.Infrastructure/   # EF Core, pgvector, OpenAI client, file watcher
 │   └── PrRag.Api/              # ASP.NET Web API host + endpoints
 ├── tests/PrRag.Tests/          # ingest diff integration tests
 ├── tools/PrRag.DataGenerator/  # synthetic data generator
-├── web/                        # React (Vite) front-end
-├── data/                       # bind-mounted into the API (/data/purchase.json)
-├── docker-compose.yml
-├── docker-compose.test.yml
-├── Dockerfile
-├── Dockerfile.web
-└── .env.example
+├── Dockerfile                  # API image
+├── Dockerfile.test             # integration test image
+└── Dockerfile.datagen          # synthetic data generator image
+frontend/                       # React (Vite) front-end + its Dockerfile
+data/                           # bind-mounted into the API (/data/purchase.json)
+docker-compose.yml
+docker-compose.test.yml
+.env.example
 ```
 
 ## EF Core migrations
 
-Migrations are applied automatically on API startup. To manage them explicitly (if you have the .NET 10 SDK), from `src/PrRag.Api`:
+Migrations are applied automatically on API startup. To manage them explicitly (if you have the .NET 10 SDK), from `backend/src/PrRag.Api`:
 
 ```bash
 dotnet ef migrations add <Name> --project ../PrRag.Infrastructure/PrRag.Infrastructure.csproj

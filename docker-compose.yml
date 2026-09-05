@@ -23,7 +23,7 @@ services:
   #   docker compose --profile demo up --build api
   api:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile
     container_name: prrag-api
     profiles:
@@ -51,8 +51,8 @@ services:
   #   docker compose --profile demo up --build web api
   web:
     build:
-      context: .
-      dockerfile: Dockerfile.web
+      context: ./frontend
+      dockerfile: Dockerfile
     container_name: prrag-web
     profiles:
       - demo
@@ -63,7 +63,7 @@ services:
 
   datagen:
     build:
-      context: .
+      context: ./backend
       dockerfile: Dockerfile.datagen
     container_name: prrag-datagen
     profiles:

@@ -1,9 +1,9 @@
 # Build stage
 FROM node:24-alpine AS build
 WORKDIR /app
-COPY web/package.json web/package-lock.json ./
+COPY package.json package-lock.json ./
 RUN npm ci
-COPY web/ ./
+COPY . ./
 RUN npm run build
 
 # Runtime stage
@@ -12,7 +12,7 @@ FROM nginx:1.27-alpine AS runtime
 # Custom config so nginx binds a non-privileged port and can run as the
 # unprivileged `nginx` user. Logs/temp dirs point into /tmp which the nginx
 # user can write.
-COPY web/nginx.conf /etc/nginx/nginx.conf
+COPY nginx.conf /etc/nginx/nginx.conf
 COPY --from=build /app/dist /usr/share/nginx/html
 RUN chown -R nginx:nginx /usr/share/nginx/html /var/cache/nginx /etc/nginx/nginx.conf
 EXPOSE 8080

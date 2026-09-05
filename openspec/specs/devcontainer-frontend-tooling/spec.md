@@ -14,11 +14,11 @@ The devcontainer SHALL include Node.js (LTS) and npm so that front-end developme
 - **THEN** `node --version` and `npm --version` return valid versions
 
 #### Scenario: Install front-end dependencies
-- **WHEN** a developer runs `npm install` in the `web/` directory inside the devcontainer
+- **WHEN** a developer runs `npm install` in the `frontend/` directory inside the devcontainer
 - **THEN** `node_modules` is created and all dependencies resolve without errors
 
 #### Scenario: Run Vite dev server
-- **WHEN** a developer runs `npm run dev` in the `web/` directory inside the devcontainer
+- **WHEN** a developer runs `npm run dev` in the `frontend/` directory inside the devcontainer
 - **THEN** the Vite dev server starts and is accessible on the expected port
 
 ### Requirement: Front-end VS Code extensions installed

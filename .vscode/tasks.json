@@ -4,7 +4,7 @@
     {
       "label": "build",
       "type": "shell",
-      "command": "dotnet build ${workspaceFolder}/PrRag.sln -c Debug",
+      "command": "dotnet build ${workspaceFolder}/backend/PrRag.sln -c Debug",
       "group": {
         "kind": "build",
         "isDefault": true
@@ -14,14 +14,14 @@
     {
       "label": "watch",
       "type": "shell",
-      "command": "dotnet watch --project ${workspaceFolder}/src/PrRag.Api/PrRag.Api.csproj",
+      "command": "dotnet watch --project ${workspaceFolder}/backend/src/PrRag.Api/PrRag.Api.csproj",
       "isBackground": true,
       "problemMatcher": "$msCompile"
     },
     {
       "label": "test",
       "type": "shell",
-      "command": "dotnet test ${workspaceFolder}/tests/PrRag.Tests/PrRag.Tests.csproj -c Debug",
+      "command": "dotnet test ${workspaceFolder}/backend/tests/PrRag.Tests/PrRag.Tests.csproj -c Debug",
       "group": {
         "kind": "test",
         "isDefault": true

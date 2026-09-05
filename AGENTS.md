@@ -3,15 +3,15 @@
 ## Verify
 
 ```bash
-dotnet build PrRag.sln
-dotnet test tests/PrRag.Tests
+dotnet build backend/PrRag.sln
+dotnet test backend/tests/PrRag.Tests
 ```
 
 Tests require a reachable Postgres instance:
 
 ```bash
 TEST_CONNECTION_STRING="Host=localhost;Port=5432;Username=prrag;Password=prrag" \
-  dotnet test tests/PrRag.Tests
+  dotnet test backend/tests/PrRag.Tests
 ```
 
 Or via Docker (db must already be running):
@@ -22,22 +22,22 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test u
 
 There is no linter, formatter, or typecheck script beyond `dotnet build`.
 
-The Vite + React front-end in `web/` has its own verify:
+The Vite + React front-end in `frontend/` has its own verify:
 
 ```bash
-cd web && npm install && npm run build
+cd frontend && npm install && npm run build
 ```
 
 ## Architecture
 
-Layered .NET 10 solution (`PrRag.sln`):
+Layered .NET 10 solution (`backend/PrRag.sln`):
 
 - **PrRag.Application** — domain models, DTOs, service interfaces, business logic. No infrastructure dependencies.
 - **PrRag.Infrastructure** — EF Core DbContext, pgvector, OpenAI clients, file watcher. Implements Application abstractions.
 - **PrRag.Api** — ASP.NET minimal API host. Calls `AddApplication()` / `AddInfrastructure()` for DI, runs migrations on startup via `DbInitializer.ApplyMigrationsAsync`.
 - **PrRag.Tests** — xUnit integration tests against a real Postgres. Uses fakes for OpenAI (no API key needed).
 - **PrRag.DataGenerator** — standalone console tool, outputs `purchase.json`.
-- **web/** — Vite + React + TypeScript front-end, not part of the .NET solution. Calls the API endpoints (`/api/chat`, `/api/ingest`, `/api/status`).
+- **`web`/`frontend` layout** — the .NET solution and projects live in `backend/` (together with the Dockerfiles); the Vite + React + TypeScript front-end lives in `frontend/`, not part of the .NET solution. It calls the API endpoints (`/api/chat`, `/api/ingest`, `/api/status`). Compose files, DevContainer config, and docs stay at the repo root.
 
 Dependency direction: Api -> Infrastructure -> Application.
 
@@ -49,12 +49,12 @@ The API enables cross-origin access from the origins in `Cors__AllowedOrigins` (
 - **Embedding dimension is coupled to model**: `text-embedding-3-small` produces 1536-d vectors. Changing the model requires a new EF Core migration and reindex.
 - **`data/purchase.json`** is a bind-mount volume. The API watches it for changes (FileSystemWatcher + debounce). The file is read-only inside the API container.
 - **Settings use `__` separator** in `.env` (e.g. `OpenAI__ApiKey`) — these are the same `.NET` config keys the app reads. No duplication.
-- **EF Core migrations auto-apply on API startup.** No manual step needed. To create explicit migrations: `dotnet ef migrations add <Name> --project src/PrRag.Infrastructure/PrRag.Infrastructure.csproj`.
+- **EF Core migrations auto-apply on API startup.** No manual step needed. To create explicit migrations: `dotnet ef migrations add <Name> --project src/PrRag.Infrastructure/PrRag.Infrastructure.csproj` (from `backend/`).
 - **CORS is config-driven**: `Cors__AllowedOrigins` (default `http://localhost:5173`) controls what origins may call the API from the browser. Add origins (comma-separated) if the front-end is served elsewhere.
 - **DevContainer build owner**: The `devcontainer` service runs as `root` by default, but `devcontainer.json` sets `"remoteUser": "vscode"`. Running `dotnet build` as `root` inside the container writes `obj/`/`bin/` artifacts owned by `root`; a subsequent VS Code build (as `vscode`) fails with `Permission denied` writing `.cache` files. Always build as `vscode` (e.g. `docker compose exec -u vscode devcontainer dotnet build ...` or the VS Code `build` task). If a root-owned build breaks things, remove all `bin`/`obj` as root first, then rebuild as `vscode`:
   ```sh
-  docker compose exec -u root devcontainer sh -c 'find /workspaces/src /workspaces/tests /workspaces/tools -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +'
-  docker compose exec -u vscode -w /workspaces devcontainer dotnet build /workspaces/PrRag.sln -c Debug
+  docker compose exec -u root devcontainer sh -c 'find /workspaces/backend/src /workspaces/backend/tests /workspaces/backend/tools -type d \( -name bin -o -name obj \) -prune -exec rm -rf {} +'
+  docker compose exec -u vscode -w /workspaces/backend devcontainer dotnet build /workspaces/backend/PrRag.sln -c Debug
   ```
 
 ## Tests
