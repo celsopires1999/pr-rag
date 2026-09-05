@@ -27,7 +27,6 @@ public static class IntegrationServiceFactory
         var config = new ConfigurationBuilder().Build();
 
         var embeddingService = new FakeEmbeddingService();
-        var rewriter = new FakeQueryRewriter();
         var chatClient = new FakeChatClient();
         var services = new ServiceCollection();
 
@@ -53,8 +52,6 @@ public static class IntegrationServiceFactory
         services.AddApplication();
 
         services.AddSingleton<IEmbeddingService>(embeddingService);
-        services.AddSingleton(rewriter);
-        services.AddSingleton<IQueryRewriter>(rewriter);
         services.AddSingleton(chatClient);
         services.AddSingleton<IChatClient>(chatClient);
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();

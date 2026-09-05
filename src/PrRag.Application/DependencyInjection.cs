@@ -12,7 +12,6 @@ public static class DependencyInjection
         services.AddScoped<IIngestionService, IngestionService>();
         services.AddScoped<IChatService, ChatService>();
         services.AddScoped<IStatusService, StatusService>();
-        services.AddScoped<IQueryRewriter, SemanticQueryRewriter>();
 
         return services;
     }

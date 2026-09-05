@@ -13,7 +13,6 @@ public sealed class ChatService : IChatService
     private readonly IChatClient _chatClient;
     private readonly IEmbeddingService _embeddingService;
     private readonly IPurchaseRequisitionRepository _repository;
-    private readonly IQueryRewriter _queryRewriter;
     private readonly IRagReportWriter _reportWriter;
     private readonly ILogger<ChatService> _logger;
     private readonly RagSettings _ragSettings;
@@ -24,13 +23,11 @@ public sealed class ChatService : IChatService
     private int _activeTopK;
     private double _activeMinSimilarity;
     private string? _activeRewrittenQuery;
-    private IReadOnlyList<ChatMessage> _conversation = Array.Empty<ChatMessage>();
 
     public ChatService(
         IChatClient chatClient,
         IEmbeddingService embeddingService,
         IPurchaseRequisitionRepository repository,
-        IQueryRewriter queryRewriter,
         IRagReportWriter reportWriter,
         ILogger<ChatService> logger,
         IOptions<RagSettings> ragSettings)
@@ -38,7 +35,6 @@ public sealed class ChatService : IChatService
         _chatClient = chatClient;
         _embeddingService = embeddingService;
         _repository = repository;
-        _queryRewriter = queryRewriter;
         _reportWriter = reportWriter;
         _logger = logger;
         _ragSettings = ragSettings.Value;
@@ -149,7 +145,6 @@ public sealed class ChatService : IChatService
         _activeTopK = topK;
         _activeMinSimilarity = minSimilarity;
         _activeRewrittenQuery = null;
-        _conversation = messages;
 
         var retrieved = new List<RagRetrievedItem>();
         var options = new ChatOptions
@@ -242,10 +237,9 @@ public sealed class ChatService : IChatService
         string query,
         CancellationToken cancellationToken)
     {
-        var optimizedQuery = await _queryRewriter.RewriteAsync(query, _conversation, cancellationToken);
-        _activeRewrittenQuery = optimizedQuery;
+        _activeRewrittenQuery = query;
 
-        var embedding = await _embeddingService.GenerateAsync(optimizedQuery, cancellationToken);
+        var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
         var results = await _repository.SearchAsync(embedding, _activeTopK, _activeMinSimilarity, cancellationToken);
         return results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
     }
@@ -290,14 +284,48 @@ public sealed class ChatService : IChatService
     private const string SystemPrompt =
         """
         You are a helpful assistant answering questions about purchase requisitions.
-        You have two tools available:
+        Think step by step using a reasoning loop: alternate between a Thought, an Action, and an Observation until you can produce a final answer.
+
+        Tools:
         - search_by_codes: use it when the user references exact ITM-* item codes or SUP* supplier codes.
         - search_semantic: use it when the user asks about requisitions by meaning or description.
-        Decide whether a tool is needed for the current question. If you use a tool, ground your
-        answer on its results. If prior conversation turns already contain the needed context,
-        you may rely on that instead of calling a tool again. Answer in the same language as the user.
-        """;
 
+        When calling search_semantic, first rewrite the user question into a short, keyword-rich query optimized for cosine similarity search against the fields above. Use the full conversation history to disambiguate references such as "that one", "the other", "as we saw earlier", etc. Resolve those references against the earlier turns and incorporate the resolved entities into the query. IMPORTANT: The query must be in english.
+
+        For each turn, follow this loop:
+        1. Thought: reason about what the user is asking and what context you already have.
+        2. Action: choose one action from the allowed vocabulary below.
+        3. Observation: review the result returned by the action before deciding the next step.
+        Repeat until you can answer. Once you have enough context, issue a Final Answer and stop calling tools.
+
+        Allowed Actions:
+        - Call a tool by name with its arguments (for example "search_by_codes", "search_semantic").
+        - "Final Answer" when the current context is sufficient to answer.
+
+        Consider the following when reasoning about the user's question:
+        - "item name" is the official name of the item in the requisition,
+        - "item code" is the official code of the item in the requisition,
+        - "description" is the free-text description the requisition which may include additional details about the item including its intended use, specifications, or other relevant information,
+        - "supplier name" is the official name of the supplier in the requisition,
+        - "supplier code" is the official code of the supplier in the requisition,
+
+        Ground your answer on the requisitions returned by the tools you called. If prior conversation
+        turns already contain the needed context, you may rely on that instead of calling a tool again.
+        If no retrieval produces usable context, answer gracefully using what you know.
+        Answer in the same language as the user.
+
+        IMPORTANT: Neve make suppositions or hallucinate information. If you don't know the answer, say "I don't have enough information to answer that."
+
+        *** Guardrails ***
+        - You are not able to determine which requisition is the newest because you do not have the date information;
+        - You are not able to determine which requisition is the oldest because you do not have the date information;
+        - You are not able to determine which requisition is the largest because you do not have the quantity information;
+        - You are not able to determine which requisition is the smallest because you do not have the quantity information;
+        - You are not able to determine which requisition is the most expensive because you do not have the price information;
+        - You are not able to determine which requisition is the least expensive because you do not have the price information        
+
+        """;
+        
     private sealed record ResolvedContext(
         ChatMessage FinalMessage,
         List<RagRetrievedItem> RetrievedItems);
