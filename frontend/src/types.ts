@@ -1,5 +1,6 @@
 export interface ChatRequest {
   question: string
+  session_id?: string
   top_k?: number
   min_similarity?: number
 }
@@ -7,6 +8,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   answer: string
   retrievedCount: number
+  session_id?: string
 }
 
 export interface IngestResult {
@@ -29,9 +31,9 @@ export interface ChatMessage {
 
 export interface ChatStreamRequest {
   question: string
+  session_id?: string
   top_k?: number
   min_similarity?: number
-  messages: ChatMessage[]
 }
 
 export interface ApiError {

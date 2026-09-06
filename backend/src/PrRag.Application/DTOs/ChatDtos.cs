@@ -6,6 +6,9 @@ public sealed class ChatRequest
 {
     public string Question { get; set; } = string.Empty;
 
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
+
     [JsonPropertyName("top_k")]
     public int TopK { get; set; }
 
@@ -17,6 +20,9 @@ public sealed class ChatResponse
 {
     public string Answer { get; set; } = string.Empty;
     public int RetrievedCount { get; set; }
+
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
 }
 
 public sealed class ChatMessageDto
@@ -28,6 +34,9 @@ public sealed class ChatMessageDto
 public sealed class ChatStreamRequest
 {
     public string Question { get; set; } = string.Empty;
+
+    [JsonPropertyName("session_id")]
+    public string? SessionId { get; set; }
 
     [JsonPropertyName("top_k")]
     public int TopK { get; set; }

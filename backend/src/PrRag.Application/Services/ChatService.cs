@@ -1,4 +1,4 @@
-using System.Text.RegularExpressions;
+using Microsoft.Agents.AI;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -12,7 +12,12 @@ namespace PrRag.Application.Services;
 
 public sealed class ChatService : IChatService
 {
-    private readonly IChatClient _chatClient;
+    private const string SkillIdKey = "SkillId";
+    private const string SkillBodyKey = "SkillBody";
+    private const string SkillBodyInjectedKey = "SkillBodyInjected";
+
+    private readonly ChatClientAgent _agent;
+    private readonly IAgentSessionStore _sessionStore;
     private readonly IEmbeddingService _embeddingService;
     private readonly IPurchaseRequisitionRepository _repository;
     private readonly IRagReportWriter _reportWriter;
@@ -21,23 +26,17 @@ public sealed class ChatService : IChatService
     private readonly ILogger<ChatService> _logger;
     private readonly RagSettings _ragSettings;
 
-    private readonly Dictionary<string, AIFunction> _functions = new(StringComparer.Ordinal);
     private readonly IList<AITool> _tools = new List<AITool>();
 
+    private AgentSession? _activeSession;
     private int _activeTopK;
     private double _activeMinSimilarity;
     private string? _activeRewrittenQuery;
-    private string? _activeSkillId;
-    private string? _activeSkillName;
-    private bool _skillActivated;
-    private bool _requisitionCreated;
-
-    private static readonly Regex SkillMarkerRegex = new(
-        @"^\[Skill:\s*([\w-]+)\]",
-        RegexOptions.Compiled | RegexOptions.IgnoreCase);
+    private readonly List<RagRetrievedItem> _activeRetrievedItems = new();
 
     public ChatService(
         IChatClient chatClient,
+        IAgentSessionStore sessionStore,
         IEmbeddingService embeddingService,
         IPurchaseRequisitionRepository repository,
         IRagReportWriter reportWriter,
@@ -46,7 +45,7 @@ public sealed class ChatService : IChatService
         ILogger<ChatService> logger,
         IOptions<RagSettings> ragSettings)
     {
-        _chatClient = chatClient;
+        _sessionStore = sessionStore;
         _embeddingService = embeddingService;
         _repository = repository;
         _reportWriter = reportWriter;
@@ -76,46 +75,44 @@ public sealed class ChatService : IChatService
             "Persists a new purchase requisition to disk as a JSON file. Call it ONLY after the user has explicitly confirmed the drafted requisition; never invent field values — use exactly the values the user provided and validated. Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester.",
             (string supplierCode, string item, string description, decimal quantity, string date, string requester, CancellationToken ct) =>
                 CreateRequisitionAsync(supplierCode, item, description, quantity, date, requester, ct));
+
+        _agent = chatClient.AsAIAgent(
+            name: "purchase-requisition-agent",
+            description: "Answers questions about purchase requisitions and guides purchase-requisition workflows.");
     }
 
     public async Task<ChatResponse> AnswerAsync(
         ChatRequest request,
         CancellationToken cancellationToken = default)
     {
+        var sessionId = ResolveSessionId(request.SessionId);
         var topKFromRequest = request.TopK > 0;
         var minSimilarityFromRequest = request.MinSimilarity > 0;
         var topK = topKFromRequest ? request.TopK : _ragSettings.TopK;
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
-        var report = new RagQueryReport
-        {
-            Question = request.Question,
-            TopK = topK,
-            MinSimilarity = minSimilarity,
-            TopKFromRequest = topKFromRequest,
-            MinSimilarityFromRequest = minSimilarityFromRequest,
-        };
+        var (session, created) = await _sessionStore.GetOrCreateAsync(
+            sessionId,
+            () => _agent.CreateSessionAsync(cancellationToken),
+            cancellationToken);
 
-        ResetSkillState();
-        var messages = await BuildConversationAsync(request.Question, null, cancellationToken);
-        var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
-        report.RetrievedCount = resolved.RetrievedItems.Count;
-        report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
-        report.RewrittenQuery = _activeRewrittenQuery;
-        report.SkillId = _activeSkillId;
-        report.SkillName = _activeSkillName;
-        report.SkillActivated = _skillActivated;
+        _activeSession = session;
+        _activeTopK = topK;
+        _activeMinSimilarity = minSimilarity;
+        _activeRewrittenQuery = null;
+        _activeRetrievedItems.Clear();
 
-        var answer = ApplySkillMarker(resolved.FinalMessage.Text);
-        report.Answer = answer;
-        report.RetrievedItems = resolved.RetrievedItems;
+        var messages = BuildTurnMessages(request.Question, created);
+        var response = await _agent.RunAsync(messages, session, BuildRunOptions(), cancellationToken);
 
-        await WriteReportAsync(report, cancellationToken);
+        var answer = response.Text;
+        await WriteReportAsync(answer, request.Question, topK, minSimilarity, topKFromRequest, minSimilarityFromRequest, cancellationToken);
 
         return new ChatResponse
         {
             Answer = answer,
-            RetrievedCount = resolved.RetrievedItems.Count,
+            RetrievedCount = _activeRetrievedItems.Count,
+            SessionId = sessionId,
         };
     }
 
@@ -123,37 +120,75 @@ public sealed class ChatService : IChatService
         ChatStreamRequest request,
         [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
+        var sessionId = ResolveSessionId(request.SessionId);
         var topKFromRequest = request.TopK > 0;
         var minSimilarityFromRequest = request.MinSimilarity > 0;
         var topK = topKFromRequest ? request.TopK : _ragSettings.TopK;
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
-        var report = new RagQueryReport
+        var (session, created) = await _sessionStore.GetOrCreateAsync(
+            sessionId,
+            () => _agent.CreateSessionAsync(cancellationToken),
+            cancellationToken);
+
+        _activeSession = session;
+        _activeTopK = topK;
+        _activeMinSimilarity = minSimilarity;
+        _activeRewrittenQuery = null;
+        _activeRetrievedItems.Clear();
+
+        var messages = BuildTurnMessages(request.Question, created);
+        var latestText = new System.Text.StringBuilder();
+        await foreach (var update in _agent.RunStreamingAsync(messages, session, BuildRunOptions(), cancellationToken))
         {
-            Question = request.Question,
-            TopK = topK,
-            MinSimilarity = minSimilarity,
-            TopKFromRequest = topKFromRequest,
-            MinSimilarityFromRequest = minSimilarityFromRequest,
-        };
+            if (!string.IsNullOrEmpty(update.Text))
+            {
+                latestText.Append(update.Text);
+                yield return update.Text;
+            }
+        }
 
-        ResetSkillState();
-        var messages = await BuildConversationAsync(request.Question, request.Messages, cancellationToken);
-        var resolved = await ResolveContextAsync(messages, topK, minSimilarity, cancellationToken);
-        report.RetrievedCount = resolved.RetrievedItems.Count;
-        report.UsedNoContextFallback = resolved.RetrievedItems.Count == 0;
-        report.RewrittenQuery = _activeRewrittenQuery;
-        report.SkillId = _activeSkillId;
-        report.SkillName = _activeSkillName;
-        report.SkillActivated = _skillActivated;
+        await WriteReportAsync(latestText.ToString(), request.Question, topK, minSimilarity, topKFromRequest, minSimilarityFromRequest, cancellationToken);
+    }
 
-        var answer = ApplySkillMarker(resolved.FinalMessage.Text);
-        report.Answer = answer;
-        report.RetrievedItems = resolved.RetrievedItems;
+    private ChatClientAgentRunOptions BuildRunOptions()
+    {
+        return new ChatClientAgentRunOptions(new ChatOptions
+        {
+            Tools = _tools,
+            ToolMode = ChatToolMode.Auto,
+        });
+    }
 
-        yield return answer;
+    private static string ResolveSessionId(string? requested)
+    {
+        return string.IsNullOrWhiteSpace(requested) ? Guid.NewGuid().ToString("N") : requested.Trim();
+    }
 
-        await WriteReportAsync(report, cancellationToken);
+    /// <summary>
+    /// Builds the messages for a single turn. Only a brand-new session receives
+    /// the system prompt; the <see cref="AgentSession"/> accumulates history
+    /// across runs, so later turns only need the current user message. An active
+    /// skill whose guidance has not been injected yet is re-injected as an extra
+    /// system message.
+    /// </summary>
+    private List<ChatMessage> BuildTurnMessages(string question, bool created)
+    {
+        var messages = new List<ChatMessage>();
+        if (created)
+        {
+            messages.Add(new ChatMessage(ChatRole.System, BuildSystemPrompt()));
+        }
+
+        var skillBody = ReadActiveSkillBody(_activeSession!);
+        if (skillBody is not null)
+        {
+            messages.Add(new ChatMessage(ChatRole.System, skillBody));
+            _activeSession!.StateBag.SetValue(SkillBodyInjectedKey, "true");
+        }
+
+        messages.Add(new ChatMessage(ChatRole.User, question));
+        return messages;
     }
 
     private void RegisterFunction(
@@ -167,96 +202,7 @@ public sealed class ChatService : IChatService
             Description = description,
             MarshalResult = (result, _, _) => new ValueTask<object?>(result),
         });
-        _functions[name] = function;
         _tools.Add(function);
-    }
-
-    private async Task<ResolvedContext> ResolveContextAsync(
-        List<ChatMessage> messages,
-        int topK,
-        double minSimilarity,
-        CancellationToken cancellationToken)
-    {
-        _activeTopK = topK;
-        _activeMinSimilarity = minSimilarity;
-        _activeRewrittenQuery = null;
-
-        var retrieved = new List<RagRetrievedItem>();
-        var options = new ChatOptions
-        {
-            Tools = _tools,
-            ToolMode = ChatToolMode.Auto,
-        };
-
-        while (true)
-        {
-            var response = await _chatClient.GetResponseAsync(messages, options, cancellationToken);
-            var assistant = response.Messages.LastOrDefault(m => m.Role == ChatRole.Assistant);
-            if (assistant is null)
-            {
-                break;
-            }
-
-            var calls = assistant.Contents
-                .OfType<FunctionCallContent>()
-                .Where(c => !c.InformationalOnly)
-                .ToList();
-
-            messages.Add(assistant);
-
-            if (calls.Count == 0)
-            {
-                return new ResolvedContext(assistant, retrieved);
-            }
-
-            foreach (var call in calls)
-            {
-                if (_functions.TryGetValue(call.Name, out var function))
-                {
-                    var result = await InvokeFunctionAsync(function, call, cancellationToken);
-                    if (result is IReadOnlyList<RagRetrievedItem> items)
-                    {
-                        retrieved.AddRange(items);
-                    }
-
-                    messages.Add(new ChatMessage(
-                        ChatRole.Tool,
-                        new List<AIContent> { new FunctionResultContent(call.CallId, result) }));
-                }
-                else
-                {
-                    messages.Add(new ChatMessage(
-                        ChatRole.Tool,
-                        new List<AIContent>
-                        {
-                            new FunctionResultContent(call.CallId, "Unknown tool. Use search_by_codes, search_semantic, activate_skill or create_requisition."),
-                        }));
-                }
-            }
-        }
-
-        var fallback = new ChatMessage(
-            ChatRole.Assistant,
-            "I don't have enough information to answer that.");
-        return new ResolvedContext(fallback, retrieved);
-    }
-
-    private async Task<object> InvokeFunctionAsync(
-        AIFunction function,
-        FunctionCallContent call,
-        CancellationToken cancellationToken)
-    {
-        var arguments = new AIFunctionArguments();
-
-        if (call.Arguments is { Count: > 0 } args)
-        {
-            foreach (var pair in args)
-            {
-                arguments[pair.Key] = pair.Value;
-            }
-        }
-
-        return (await function.InvokeAsync(arguments, cancellationToken)) ?? string.Empty;
     }
 
     private async Task<IReadOnlyList<RagRetrievedItem>> SearchByCodesAsync(
@@ -265,7 +211,9 @@ public sealed class ChatService : IChatService
         CancellationToken cancellationToken)
     {
         var results = await _repository.SearchByCodesAsync(items, suppliers, _activeTopK, cancellationToken);
-        return results.Select(r => RagRetrievedItem.From(r, null)).ToList();
+        var mapped = results.Select(r => RagRetrievedItem.From(r, null)).ToList();
+        _activeRetrievedItems.AddRange(mapped);
+        return mapped;
     }
 
     private async Task<IReadOnlyList<RagRetrievedItem>> SearchSemanticAsync(
@@ -276,7 +224,9 @@ public sealed class ChatService : IChatService
 
         var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
         var results = await _repository.SearchAsync(embedding, _activeTopK, _activeMinSimilarity, cancellationToken);
-        return results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
+        var mapped = results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
+        _activeRetrievedItems.AddRange(mapped);
+        return mapped;
     }
 
     private async Task<string> ActivateSkillAsync(string name, CancellationToken cancellationToken)
@@ -289,9 +239,9 @@ public sealed class ChatService : IChatService
             return $"Unknown skill '{name}'. Available skills: {names}.";
         }
 
-        _activeSkillId = skill.Name;
-        _activeSkillName = skill.Name;
-        _skillActivated = true;
+        _activeSession!.StateBag.SetValue(SkillIdKey, skill.Name);
+        _activeSession.StateBag.SetValue(SkillBodyKey, skill.Body);
+        _activeSession.StateBag.TryRemoveValue(SkillBodyInjectedKey);
         return skill.Body;
     }
 
@@ -316,81 +266,35 @@ public sealed class ChatService : IChatService
 
         if (result.Success)
         {
-            _requisitionCreated = true;
+            ClearSkillState(_activeSession!);
             return $"Requisition created: {result.FileName}.";
         }
 
         return result.Error!;
     }
 
-    private async Task<List<ChatMessage>> BuildConversationAsync(
-        string question,
-        IReadOnlyList<ChatMessageDto>? history,
-        CancellationToken cancellationToken)
+    private static string? ReadActiveSkillBody(AgentSession session)
     {
-        var messages = new List<ChatMessage>
-        {
-            new(ChatRole.System, BuildSystemPrompt()),
-        };
-
-        var restoredSkill = await FindActiveSkillFromHistoryAsync(history, cancellationToken);
-        if (restoredSkill is not null)
-        {
-            _activeSkillId = restoredSkill.Name;
-            _activeSkillName = restoredSkill.Name;
-            _skillActivated = true;
-            messages.Add(new ChatMessage(ChatRole.System, restoredSkill.Body));
-        }
-
-        if (history is not null)
-        {
-            foreach (var msg in history)
-            {
-                var role = string.Equals(msg.Role, "assistant", StringComparison.OrdinalIgnoreCase)
-                    ? ChatRole.Assistant
-                    : ChatRole.User;
-                if (role == ChatRole.Assistant || role == ChatRole.User)
-                {
-                    messages.Add(new ChatMessage(role, msg.Content));
-                }
-            }
-        }
-
-        messages.Add(new ChatMessage(ChatRole.User, question));
-        return messages;
-    }
-
-    /// <summary>
-    /// Restores an activated skill on a subsequent turn. The chat history the
-    /// client sends is plain text, so the assistant marks an active skill with a
-    /// leading "[Skill: &lt;name&gt;]" line, which is parsed back here and the
-    /// skill's guidance is re-injected as a system message.
-    /// </summary>
-    private async Task<Skill?> FindActiveSkillFromHistoryAsync(
-        IReadOnlyList<ChatMessageDto>? history,
-        CancellationToken cancellationToken)
-    {
-        if (history is null)
+        if (!session.StateBag.TryGetValue<string>(SkillIdKey, out var skillId)
+            || string.IsNullOrWhiteSpace(skillId))
         {
             return null;
         }
 
-        for (var i = history.Count - 1; i >= 0; i--)
+        // Guidance already injected in an earlier turn of this session.
+        if (session.StateBag.TryGetValue<string>(SkillBodyInjectedKey, out var injected) && injected == "true")
         {
-            var message = history[i];
-            if (!string.Equals(message.Role, "assistant", StringComparison.OrdinalIgnoreCase))
-            {
-                continue;
-            }
-
-            var match = SkillMarkerRegex.Match(message.Content ?? string.Empty);
-            if (match.Success)
-            {
-                return await _skillService.GetSkillAsync(match.Groups[1].Value, cancellationToken);
-            }
+            return null;
         }
 
-        return null;
+        return session.StateBag.TryGetValue<string>(SkillBodyKey, out var body) ? body : null;
+    }
+
+    private static void ClearSkillState(AgentSession session)
+    {
+        session.StateBag.TryRemoveValue(SkillIdKey);
+        session.StateBag.TryRemoveValue(SkillBodyKey);
+        session.StateBag.TryRemoveValue(SkillBodyInjectedKey);
     }
 
     private string BuildSystemPrompt()
@@ -410,46 +314,36 @@ public sealed class ChatService : IChatService
             activate_skill to load it and then follow its instructions step by step. A skill only adds
             conversational guidance; it NEVER adds, removes, or changes the tools available to you. If no
             skill matches, answer normally without activating one.
-
-            Marker rule (required): while a skill is active, your reply MUST start with the exact line
-            "[Skill: <skill-name>]" (skill name in place of the placeholder) followed by your actual
-            answer on the next line. The marker is how the guided workflow persists across turns. Stop
-            using the marker once the skill's workflow is complete — for example, right after successfully
-            calling create_requisition.
             """;
     }
 
-    /// <summary>
-    /// Guarantees the leading "[Skill: &lt;name&gt;]" marker on the returned answer
-    /// while a skill is active, so the plain-text history can restore the
-    /// guidance on the following turn. The marker is dropped once the skill's
-    /// deliverable (the requisition) has been persisted.
-    /// </summary>
-    private string ApplySkillMarker(string answer)
+    private async Task WriteReportAsync(
+        string? answer,
+        string question,
+        int topK,
+        double minSimilarity,
+        bool topKFromRequest,
+        bool minSimilarityFromRequest,
+        CancellationToken cancellationToken)
     {
-        if (!_skillActivated || _activeSkillName is null || _requisitionCreated)
+        var (skillId, skillActivated) = GetActiveSkillForReport(_activeSession);
+        var report = new RagQueryReport
         {
-            return answer;
-        }
+            Question = question,
+            TopK = topK,
+            MinSimilarity = minSimilarity,
+            TopKFromRequest = topKFromRequest,
+            MinSimilarityFromRequest = minSimilarityFromRequest,
+            RetrievedCount = _activeRetrievedItems.Count,
+            UsedNoContextFallback = _activeRetrievedItems.Count == 0,
+            RewrittenQuery = _activeRewrittenQuery,
+            SkillId = skillId,
+            SkillName = skillId,
+            SkillActivated = skillActivated,
+            Answer = answer ?? string.Empty,
+            RetrievedItems = _activeRetrievedItems,
+        };
 
-        if (SkillMarkerRegex.IsMatch(answer))
-        {
-            return answer;
-        }
-
-        return $"[Skill: {_activeSkillName}]\n{answer}";
-    }
-
-    private void ResetSkillState()
-    {
-        _activeSkillId = null;
-        _activeSkillName = null;
-        _skillActivated = false;
-        _requisitionCreated = false;
-    }
-
-    private async Task WriteReportAsync(RagQueryReport report, CancellationToken cancellationToken)
-    {
         try
         {
             await _reportWriter.WriteAsync(report, cancellationToken);
@@ -458,6 +352,21 @@ public sealed class ChatService : IChatService
         {
             _logger.LogError(ex, "Failed to write RAG observability report");
         }
+    }
+
+    private static (string? SkillName, bool Active) GetActiveSkillForReport(AgentSession? session)
+    {
+        if (session is null)
+        {
+            return (null, false);
+        }
+
+        if (!session.StateBag.TryGetValue<string>(SkillIdKey, out var skillId) || string.IsNullOrWhiteSpace(skillId))
+        {
+            return (null, false);
+        }
+
+        return (skillId, true);
     }
 
     private const string SystemPrompt =
@@ -506,8 +415,4 @@ public sealed class ChatService : IChatService
         - You are not able to determine which requisition is the least expensive because you do not have the price information
 
         """;
-
-    private sealed record ResolvedContext(
-        ChatMessage FinalMessage,
-        List<RagRetrievedItem> RetrievedItems);
 }

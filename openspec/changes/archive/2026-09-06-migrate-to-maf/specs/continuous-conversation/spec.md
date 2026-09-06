@@ -1,10 +1,4 @@
-# Continuous Conversation
-
-## Purpose
-
-Provide a continuous, multi-turn chat experience by sending the full conversation history to the chat model on every turn and preserving tool-resolved context across turns.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Full conversation context to the model
 The system SHALL pass conversation history to the `AIAgent` via a server-side `AgentSession` keyed by a client-supplied `session_id`, which manages the complete message history including all prior user/assistant messages and the current question on every turn.

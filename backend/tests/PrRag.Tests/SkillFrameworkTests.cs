@@ -144,21 +144,32 @@ public class SkillFrameworkTests : IAsyncLifetime
     [Fact]
     public async Task Active_skill_guidance_is_restored_on_a_follow_up_turn()
     {
+        var sessionId = Guid.NewGuid().ToString("N");
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
+        chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
+
+        // Turn 1 activates the skill and persists it in the session state bag.
+        var first = await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "I want to create a purchase requisition.",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+        Assert.NotEmpty(first.Answer);
+
+        // Turn 2 on the same session restores the skill guidance from session
+        // state — no "[Skill: ...]" marker in the client history.
         var streamed = new List<string>();
         await foreach (var token in chat.StreamAsync(new ChatStreamRequest
         {
+            SessionId = sessionId,
             Question = "the item is ITM0001, quantity 3, delivery 2026-10-01",
             TopK = 5,
             MinSimilarity = 0,
-            Messages = new List<ChatMessageDto>
-            {
-                new() { Role = "user", Content = "I want to create a purchase requisition." },
-                new() { Role = "assistant", Content = "[Skill: create-purchase-requisition]\nGreat, let's create a new purchase requisition. What is the item code?" },
-            },
         }))
         {
             streamed.Add(token);

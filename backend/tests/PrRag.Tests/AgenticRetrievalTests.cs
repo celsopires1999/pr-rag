@@ -136,6 +136,7 @@ public class AgenticRetrievalTests : IAsyncLifetime
     [Fact]
     public async Task Full_history_carried_across_turns()
     {
+        var sessionId = Guid.NewGuid().ToString("N");
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
@@ -145,17 +146,24 @@ public class AgenticRetrievalTests : IAsyncLifetime
             "search_by_codes",
             new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000002" } });
 
-        var streamed = new List<string>();
-        await foreach (var token in chat.StreamAsync(new ChatStreamRequest
+        var first = await chat.AnswerAsync(new ChatRequest
         {
+            SessionId = sessionId,
             Question = "give me details on SUP000002",
             TopK = 5,
             MinSimilarity = 0,
-            Messages = new List<ChatMessageDto>
-            {
-                new() { Role = "user", Content = "I need info about Beta Components." },
-                new() { Role = "assistant", Content = "I will fetch that supplier." },
-            },
+        });
+        Assert.Equal(1, first.RetrievedCount);
+
+        // Second turn on the same session: history is carried server-side, so
+        // the client does not resend it.
+        var streamed = new List<string>();
+        await foreach (var token in chat.StreamAsync(new ChatStreamRequest
+        {
+            SessionId = sessionId,
+            Question = "tell me more about that supplier",
+            TopK = 5,
+            MinSimilarity = 0,
         }))
         {
             streamed.Add(token);
@@ -165,8 +173,8 @@ public class AgenticRetrievalTests : IAsyncLifetime
 
         var messages = chatClient.LastMessages;
         Assert.Contains(messages, m => m.Role == ChatRole.Tool);
-        Assert.Contains(messages, m => m.Text == "I need info about Beta Components.");
-        Assert.Contains(messages, m => m.Role == ChatRole.Assistant && m.Text == "I will fetch that supplier.");
+        Assert.Contains(messages, m => m.Text == "give me details on SUP000002");
+        Assert.Contains(messages, m => m.Text == "tell me more about that supplier");
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)

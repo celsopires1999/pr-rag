@@ -9,6 +9,7 @@ public static class DependencyInjection
     public static IServiceCollection AddApplication(this IServiceCollection services)
     {
         services.AddSingleton<PurchaseRequisitionFileLoader>();
+        services.AddSingleton<IAgentSessionStore, InMemoryAgentSessionStore>();
         services.AddScoped<IIngestionService, IngestionService>();
         services.AddScoped<IChatService, ChatService>();
         services.AddScoped<IStatusService, StatusService>();

@@ -1,10 +1,4 @@
-# Chat Streaming
-
-## Purpose
-
-Provide chat answers incrementally as they are generated (server-sent events), and support multi-turn conversations by accepting conversation history alongside the current question while keeping retrieval grounded on the current question.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Streamed chat responses
 The system SHALL provide a streaming chat endpoint that returns the assistant answer incrementally via `AIAgent.RunStreamingAsync()` (or equivalent MAF streaming API), rather than only as a complete response.

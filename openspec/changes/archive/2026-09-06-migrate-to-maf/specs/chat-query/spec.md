@@ -1,10 +1,4 @@
-# Chat Query
-
-## Purpose
-
-Natural-language Q&A over purchase requisitions, answering questions grounded in context retrieved via vector similarity search over embeddings using the configured embedding and chat models.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Chat over purchase requisitions
 The system SHALL accept a natural-language question and return an answer grounded in purchase-requisition context retrieved by the MAF `AIAgent` via tool calls against PostgreSQL, using the configured embedding and chat models. The agent SHALL decide whether to invoke a retrieval tool and which one via `RunAsync()`, rather than the pipeline forcing retrieval on every question. When a request matches a registered skill, the system SHALL additionally engage the skill's guided workflow instead of answering in free-form; when no skill matches, behavior is unchanged.
@@ -14,12 +8,12 @@ The system SHALL accept a natural-language question and return an answer grounde
 - **THEN** the system invokes `AIAgent.RunAsync()` on the session resolved for that `session_id`, the agent chooses whether to call a PostgreSQL retrieval tool, resolves any tool results, and returns an answer grounded in the retrieved context (with the resolved `session_id` echoed in the response)
 
 #### Scenario: Exact lookup via tool
-- **WHEN** the model calls the exact-match lookup tool for `ITM-*`/`SUP*` codes
-- **THEN** the system returns the matching requisitions to the model and grounds the answer on them
+- **WHEN** the agent calls the exact-match lookup tool for `ITM-*`/`SUP*` codes
+- **THEN** the system returns the matching requisitions to the agent and grounds the answer on them
 
 #### Scenario: Semantic search via tool
-- **WHEN** the model calls the semantic search tool
-- **THEN** the system embeds the search text and returns the requisitions above the similarity threshold to the model
+- **WHEN** the agent calls the semantic search tool
+- **THEN** the system embeds the search text and returns the requisitions above the similarity threshold to the agent
 
 #### Scenario: Configurable retrieval depth
 - **WHEN** the client provides a `top_k` value

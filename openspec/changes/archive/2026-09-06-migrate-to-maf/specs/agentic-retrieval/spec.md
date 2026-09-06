@@ -1,10 +1,4 @@
-# Agentic Retrieval
-
-## Purpose
-
-Decide whether and what context to retrieve from PostgreSQL by letting the chat model call tool functions, rather than running a fixed retrieval pipeline on every question.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Tool-selected PostgreSQL retrieval
 The system SHALL expose the PostgreSQL lookup operations as tool functions registered on the MAF `AIAgent`, and SHALL let the model decide whether to invoke them and which one to use during `AIAgent.RunAsync()` execution.
@@ -56,7 +50,7 @@ The system SHALL keep `top_k` and `min_similarity` configurable and SHALL apply 
 
 #### Scenario: Defaults from configuration
 - **WHEN** the client omits `top_k` and `min_similarity`
-- **THEN** the system uses the configured defaults for tool-driven retrieval
+- **THEN** the system uses the configured defaults for agent-driven retrieval
 
 ### Requirement: No-context graceful answer
 The system SHALL answer gracefully when the MAF agent performs no successful retrieval that can ground the answer.

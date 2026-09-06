@@ -74,23 +74,40 @@ public sealed class FakeChatClient : IChatClient
         return Task.FromResult(new ChatResponse { Messages = new List<ChatMessage> { reply } });
     }
 
-    public IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
+    public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(
         IEnumerable<ChatMessage> messages,
         ChatOptions? options = null,
-        CancellationToken cancellationToken = default)
+        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        return EmptyAsync();
+        var response = await GetResponseAsync(messages, options, cancellationToken);
+        foreach (var message in response.Messages)
+        {
+            foreach (var content in message.Contents)
+            {
+                switch (content)
+                {
+                    case FunctionCallContent call:
+                        yield return new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Assistant,
+                            Contents = new[] { call },
+                        };
+                        break;
+                    case TextContent text:
+                        yield return new ChatResponseUpdate
+                        {
+                            Role = ChatRole.Assistant,
+                            Contents = new[] { text },
+                        };
+                        break;
+                }
+            }
+        }
     }
 
     public object? GetService(Type serviceType, object? serviceKey = null) => null;
 
     public void Dispose()
     {
-    }
-
-    private static async IAsyncEnumerable<ChatResponseUpdate> EmptyAsync()
-    {
-        await Task.CompletedTask;
-        yield break;
     }
 }

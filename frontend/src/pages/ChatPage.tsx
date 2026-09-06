@@ -10,6 +10,16 @@ import { useRagSettings } from '@/context/RagSettingsContext'
 import type { ChatMessage } from '@/types'
 import { cn } from '@/lib/utils'
 
+const SESSION_ID_KEY = 'prrag.session_id'
+
+function getOrCreateSessionId(): string {
+  const existing = localStorage.getItem(SESSION_ID_KEY)
+  if (existing) return existing
+  const id = crypto.randomUUID()
+  localStorage.setItem(SESSION_ID_KEY, id)
+  return id
+}
+
 export function ChatPage() {
   const { topK, minSimilarity } = useRagSettings()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -18,6 +28,7 @@ export function ChatPage() {
   const [error, setError] = useState<string | null>(null)
   const endRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
+  const sessionIdRef = useRef<string>(getOrCreateSessionId())
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -29,8 +40,7 @@ export function ChatPage() {
     if (!question || streaming) return
 
     const userMessage: ChatMessage = { role: 'user', content: question }
-    const history = [...messages]
-    setMessages([...history, userMessage])
+    setMessages((prev) => [...prev, userMessage])
     setInput('')
     setError(null)
     setStreaming(true)
@@ -45,9 +55,9 @@ export function ChatPage() {
       await chatStream(
         {
           question,
+          session_id: sessionIdRef.current,
           top_k: topK ?? undefined,
           min_similarity: minSimilarity ?? undefined,
-          messages: history,
         },
         (token) => {
           setMessages((prev) => {
