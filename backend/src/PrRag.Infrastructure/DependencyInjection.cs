@@ -22,6 +22,8 @@ public static class DependencyInjection
         services.Configure<RagSettings>(configuration.GetSection(RagSettings.SectionName));
         services.Configure<DataSettings>(configuration.GetSection(DataSettings.SectionName));
         services.Configure<ReportSettings>(configuration.GetSection(ReportSettings.SectionName));
+        services.Configure<SkillsSettings>(configuration.GetSection(SkillsSettings.SectionName));
+        services.Configure<RequisitionsSettings>(configuration.GetSection(RequisitionsSettings.SectionName));
 
         var openAi = configuration.GetSection(OpenAISettings.SectionName).Get<OpenAISettings>()
             ?? new OpenAISettings();
@@ -45,8 +47,11 @@ public static class DependencyInjection
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
         services.AddScoped<IEmbeddingService, OpenAiEmbeddingService>();
         services.AddSingleton<IRagReportWriter, FileRagReportWriter>();
+        services.AddSingleton<ISkillService, SkillsDirectory>();
+        services.AddSingleton<IRequisitionWriter, FileRequisitionWriter>();
 
         services.AddHostedService<FileWatcherService>();
+        services.AddHostedService<SkillsWatcherService>();
 
         return services;
     }

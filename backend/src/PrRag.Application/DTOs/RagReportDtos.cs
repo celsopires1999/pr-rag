@@ -22,6 +22,12 @@ public sealed class RagQueryReport
 
     public string? RewrittenQuery { get; set; }
 
+    public string? SkillId { get; set; }
+
+    public string? SkillName { get; set; }
+
+    public bool SkillActivated { get; set; }
+
     public List<RagRetrievedItem> RetrievedItems { get; set; } = new();
 
     public string Answer { get; set; } = string.Empty;

@@ -17,7 +17,15 @@ public sealed class FakeChatClient : IChatClient
     /// </summary>
     public FunctionCallContent? ToolCall { get; set; }
 
+    /// <summary>
+    /// Scripted tool calls issued one per turn, in order, across calls to
+    /// <see cref="GetResponseAsync"/>. When exhausted, the model answers with
+    /// <see cref="Answer"/>. Takes precedence over <see cref="ToolCall"/>.
+    /// </summary>
+    public List<FunctionCallContent> ScriptedToolCalls { get; } = new();
+
     private int _toolCallConsumed;
+    private int _scriptedIndex;
 
     public string LastPrompt
     {
@@ -50,7 +58,11 @@ public sealed class FakeChatClient : IChatClient
         }
 
         ChatMessage reply;
-        if (ToolCall is { } call && Interlocked.CompareExchange(ref _toolCallConsumed, 1, 0) == 0)
+        if (_scriptedIndex < ScriptedToolCalls.Count)
+        {
+            reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { ScriptedToolCalls[_scriptedIndex++] });
+        }
+        else if (ToolCall is { } call && Interlocked.CompareExchange(ref _toolCallConsumed, 1, 0) == 0)
         {
             reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { call });
         }

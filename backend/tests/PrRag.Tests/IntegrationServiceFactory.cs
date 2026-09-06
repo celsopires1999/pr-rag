@@ -36,7 +36,11 @@ public static class IntegrationServiceFactory
         services.Configure<RagSettings>(opts => { });
         services.Configure<OpenAISettings>(opts => { });
         services.Configure<ReportSettings>(opts => opts.OutputDirectory = Path.Combine(dataDir, "reports"));
+        services.Configure<SkillsSettings>(opts => opts.Directory = Path.Combine(dataDir, "skills"));
+        services.Configure<RequisitionsSettings>(opts => opts.Directory = Path.Combine(dataDir, "requisitions"));
         services.AddSingleton<IRagReportWriter, FileRagReportWriter>();
+        services.AddSingleton<ISkillService, SkillsDirectory>();
+        services.AddSingleton<IRequisitionWriter, FileRequisitionWriter>();
 
         var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionString);
 #if NET8_0_OR_GREATER
