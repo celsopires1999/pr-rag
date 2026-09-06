@@ -33,4 +33,10 @@ public sealed class InMemoryAgentSessionStore : IAgentSessionStore
             throw;
         }
     }
+
+    public Task<bool> RemoveAsync(string sessionId, CancellationToken cancellationToken = default)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        return Task.FromResult(_sessions.TryRemove(sessionId, out _));
+    }
 }

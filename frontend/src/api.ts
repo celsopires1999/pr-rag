@@ -48,6 +48,16 @@ export async function status(): Promise<SystemStatus> {
   return request<SystemStatus>('/api/status', { method: 'GET' })
 }
 
+export async function discardSession(sessionId: string): Promise<void> {
+  try {
+    await request<void>(`/api/sessions/${encodeURIComponent(sessionId)}`, {
+      method: 'DELETE',
+    })
+  } catch {
+    // Best-effort reset: a missing session (404) is the same outcome.
+  }
+}
+
 export async function chatStream(
   body: ChatStreamRequest,
   onToken: (token: string) => void,

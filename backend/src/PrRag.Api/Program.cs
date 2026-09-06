@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using PrRag.Api;
 using PrRag.Application;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
@@ -112,5 +113,7 @@ app.MapGet("/api/status", async (
     var status = await statusService.GetStatusAsync(ct);
     return Results.Ok(status);
 });
+
+app.MapDelete("/api/sessions/{id}", SessionEndpoints.Discard);
 
 app.Run();

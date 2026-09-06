@@ -12,4 +12,6 @@ public interface IAgentSessionStore
         string sessionId,
         Func<ValueTask<AgentSession>> create,
         CancellationToken cancellationToken = default);
+
+    Task<bool> RemoveAsync(string sessionId, CancellationToken cancellationToken = default);
 }

@@ -20,6 +20,7 @@
   <ItemGroup>
     <ProjectReference Include="..\..\src\PrRag.Application\PrRag.Application.csproj" />
     <ProjectReference Include="..\..\src\PrRag.Infrastructure\PrRag.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\PrRag.Api\PrRag.Api.csproj" />
   </ItemGroup>
 
 </Project>

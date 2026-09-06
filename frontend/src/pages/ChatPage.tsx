@@ -1,11 +1,11 @@
 import { useEffect, useRef, useState } from 'react'
-import { Send } from 'lucide-react'
+import { RefreshCw, Send } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Textarea } from '@/components/ui/textarea'
 import { Card, CardContent } from '@/components/ui/card'
 import { MarkdownRenderer } from '@/components/ui/markdown-renderer'
 import { ThinkingIndicator } from '@/components/ThinkingIndicator'
-import { chatStream } from '@/api'
+import { chatStream, discardSession } from '@/api'
 import { useRagSettings } from '@/context/RagSettingsContext'
 import type { ChatMessage } from '@/types'
 import { cn } from '@/lib/utils'
@@ -20,6 +20,12 @@ function getOrCreateSessionId(): string {
   return id
 }
 
+function newSessionId(): string {
+  const id = crypto.randomUUID()
+  localStorage.setItem(SESSION_ID_KEY, id)
+  return id
+}
+
 export function ChatPage() {
   const { topK, minSimilarity } = useRagSettings()
   const [messages, setMessages] = useState<ChatMessage[]>([])
@@ -29,6 +35,7 @@ export function ChatPage() {
   const endRef = useRef<HTMLDivElement>(null)
   const abortRef = useRef<AbortController | null>(null)
   const sessionIdRef = useRef<string>(getOrCreateSessionId())
+  const [sessionId, setSessionId] = useState(sessionIdRef.current)
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: 'smooth' })
@@ -87,8 +94,42 @@ export function ChatPage() {
     abortRef.current?.abort()
   }
 
+  async function handleNewSession() {
+    abortRef.current?.abort()
+    const previousSessionId = sessionIdRef.current
+
+    // Best-effort server-side discard so the old context is truly gone.
+    void discardSession(previousSessionId)
+
+    const next = newSessionId()
+    sessionIdRef.current = next
+    setSessionId(next)
+    setMessages([])
+    setError(null)
+  }
+
   return (
     <div className="flex h-[calc(100vh-6rem)] flex-col">
+      <div className="mx-auto flex w-full max-w-3xl items-center justify-between gap-2 pt-3">
+        <span
+          title={`Session ${sessionId}`}
+          className="text-xs text-muted-foreground"
+        >
+          Session: <span className="font-mono">{sessionId.slice(0, 8)}</span>
+        </span>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          disabled={streaming}
+          onClick={handleNewSession}
+          title="Start a new session (reset conversation context)"
+        >
+          <RefreshCw className="size-4" />
+          New session
+        </Button>
+      </div>
+
       <div className="flex-1 overflow-y-auto">
         <div className="mx-auto flex max-w-3xl flex-col gap-6 py-4">
           {messages.length === 0 && (
