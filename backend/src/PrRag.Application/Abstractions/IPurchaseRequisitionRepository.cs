@@ -25,6 +25,11 @@ public interface IPurchaseRequisitionRepository
         int topK,
         CancellationToken cancellationToken = default);
 
+    Task<bool> ExistsItemSupplierCombinationAsync(
+        string item,
+        string supplierCode,
+        CancellationToken cancellationToken = default);
+
     Task<int> CountAsync(CancellationToken cancellationToken = default);
 
     Task<int> CountEmbeddedAsync(CancellationToken cancellationToken = default);

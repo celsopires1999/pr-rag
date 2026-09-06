@@ -27,8 +27,9 @@ public class SkillFrameworkTests : IAsyncLifetime
         # Procedure
         1. Collect the required fields one at a time: supplier code, item code, description, quantity, delivery date (yyyy-MM-dd), requester.
         2. Validate item (ITM-*) and supplier (SUP*) codes with search_by_codes and flag any code with no match.
-        3. Present a structured draft and ask for explicit confirmation.
-        4. After the user confirms, call create_requisition with exactly the six validated fields and report the created file.
+        3. Also call search_by_codes with the item and supplier together to confirm at least one requisition has that exact item + supplier combination before finalizing the draft.
+        4. Present a structured draft and ask for explicit confirmation.
+        5. After the user confirms, call create_requisition with exactly the six validated fields and report the created file.
         """;
 
     public async Task InitializeAsync()
@@ -251,6 +252,37 @@ public class SkillFrameworkTests : IAsyncLifetime
 
         Assert.NotEmpty(response.Answer);
         Assert.Contains("Missing or invalid required fields", LastToolResult(chatClient));
+        Assert.False(Directory.Exists(RequisitionsDir) && Directory.GetFiles(RequisitionsDir, "*.json").Length > 0);
+    }
+
+    [Fact]
+    public async Task Create_requisition_for_unknown_item_supplier_combination_writes_no_file()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_create",
+            "create_requisition",
+            new Dictionary<string, object?>
+            {
+                ["supplierCode"] = "SUP000002",
+                ["item"] = "ITM9999",
+                ["description"] = "Hydraulic pump for maintenance.",
+                ["quantity"] = 3m,
+                ["date"] = "2026-10-01",
+                ["requester"] = "Ana Souza",
+            }));
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "persist a requisition",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        Assert.Contains("not registered for that item", LastToolResult(chatClient));
         Assert.False(Directory.Exists(RequisitionsDir) && Directory.GetFiles(RequisitionsDir, "*.json").Length > 0);
     }
 

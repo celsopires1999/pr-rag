@@ -28,7 +28,7 @@ public sealed class FileRequisitionWriter : IRequisitionWriter
         NewPurchaseRequisition requisition,
         CancellationToken cancellationToken = default)
     {
-        var validationError = Validate(requisition);
+        var validationError = requisition.Validate();
         if (validationError is not null)
         {
             return RequisitionWriteResult.Fail(validationError);
@@ -44,45 +44,6 @@ public sealed class FileRequisitionWriter : IRequisitionWriter
         File.Move(tempPath, path, overwrite: true);
 
         return RequisitionWriteResult.Ok(fileName);
-    }
-
-    private static string? Validate(NewPurchaseRequisition requisition)
-    {
-        var problems = new List<string>();
-
-        if (string.IsNullOrWhiteSpace(requisition.SupplierCode))
-        {
-            problems.Add("SupplierCode");
-        }
-
-        if (string.IsNullOrWhiteSpace(requisition.Item))
-        {
-            problems.Add("Item");
-        }
-
-        if (string.IsNullOrWhiteSpace(requisition.Description))
-        {
-            problems.Add("Description");
-        }
-
-        if (requisition.Quantity <= 0)
-        {
-            problems.Add("Quantity (must be a positive number)");
-        }
-
-        if (string.IsNullOrWhiteSpace(requisition.Date) || !DateOnly.TryParse(requisition.Date, out _))
-        {
-            problems.Add("Date (must be ISO yyyy-MM-dd)");
-        }
-
-        if (string.IsNullOrWhiteSpace(requisition.Requester))
-        {
-            problems.Add("Requester");
-        }
-
-        return problems.Count == 0
-            ? null
-            : $"Missing or invalid required fields: {string.Join(", ", problems)}.";
     }
 
     private void EnsureInitialized()

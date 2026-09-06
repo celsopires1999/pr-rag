@@ -39,6 +39,8 @@ public class SkillsDirectoryTests : IDisposable
             ---
             # Role
             You act as a purchasing assistant.
+            # Procedure
+            Validate the item + supplier combination with search_by_codes before creating.
             """);
 
         var entry = Assert.Single(_service.GetManifest());

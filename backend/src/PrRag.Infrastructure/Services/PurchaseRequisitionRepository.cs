@@ -136,6 +136,13 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
             .ToListAsync(cancellationToken);
     }
 
+    public Task<bool> ExistsItemSupplierCombinationAsync(
+        string item,
+        string supplierCode,
+        CancellationToken cancellationToken = default)
+        => _db.PurchaseRequisitions
+            .AnyAsync(x => x.Item == item && x.SupplierCode == supplierCode, cancellationToken);
+
     public Task<int> CountAsync(CancellationToken cancellationToken = default)
         => _db.PurchaseRequisitions.CountAsync(cancellationToken);
 
