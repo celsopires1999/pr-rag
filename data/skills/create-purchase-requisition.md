@@ -45,7 +45,7 @@ Collect, one question at a time, skipping any field the user has already provide
 }
 ```
 7. ONLY after the user explicitly confirms, call `create_requisition` with exactly the six validated fields (SupplierCode, ItemCode, Description, Quantity, Date, Requester). Do not invent or modify any value.
-8. Report the created file name returned by `create_requisition` to the user.
+8. Report the created requisition id returned by `create_requisition` to the user.
 
 # Guardrails
 

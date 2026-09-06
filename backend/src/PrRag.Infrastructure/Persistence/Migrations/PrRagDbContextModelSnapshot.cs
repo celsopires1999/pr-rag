@@ -82,6 +82,56 @@ namespace PrRag.Infrastructure.Persistence.Migrations
 
                     b.ToTable("data_status", (string)null);
                 });
+
+            modelBuilder.Entity("PrRag.Application.Domain.CreatedRequisition", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("uuid")
+                        .HasColumnName("id");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("created_at");
+
+                    b.Property<string>("Date")
+                        .IsRequired()
+                        .HasMaxLength(10)
+                        .HasColumnType("character varying(10)")
+                        .HasColumnName("date");
+
+                    b.Property<string>("Description")
+                        .IsRequired()
+                        .HasMaxLength(500)
+                        .HasColumnType("character varying(500)")
+                        .HasColumnName("description");
+
+                    b.Property<string>("Item")
+                        .IsRequired()
+                        .HasMaxLength(28)
+                        .HasColumnType("character varying(28)")
+                        .HasColumnName("item");
+
+                    b.Property<decimal>("Quantity")
+                        .HasColumnType("numeric")
+                        .HasColumnName("quantity");
+
+                    b.Property<string>("Requester")
+                        .IsRequired()
+                        .HasMaxLength(100)
+                        .HasColumnType("character varying(100)")
+                        .HasColumnName("requester");
+
+                    b.Property<string>("SupplierCode")
+                        .IsRequired()
+                        .HasMaxLength(9)
+                        .HasColumnType("character varying(9)")
+                        .HasColumnName("supplier_code");
+
+                    b.HasKey("Id");
+
+                    b.ToTable("created_requisitions", "created");
+                });
 #pragma warning restore 612, 618
         }
     }

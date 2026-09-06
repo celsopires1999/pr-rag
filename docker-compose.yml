@@ -41,14 +41,12 @@ services:
       RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /data/purchase.json
       Skills__Directory: /data/skills
-      Requisitions__Directory: /app/requisitions
       Cors__AllowedOrigins: ${CORS__AllowedOrigins:-http://localhost:5173}
     ports:
       - "${API_PORT:-8080}:8080"
     volumes:
       - ./data:/data:ro
       - ./reports:/app/reports
-      - ./requisitions:/app/requisitions
 
   # Web front-end. Also guarded behind the "demo" profile, matching the API.
   #   docker compose --profile demo up --build web api
@@ -97,7 +95,6 @@ services:
       RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /workspaces/data/purchase.json
       Skills__Directory: /workspaces/data/skills
-      Requisitions__Directory: ${Requisitions__Directory:-/workspaces/requisitions}
     command: sleep infinity
 
 volumes:

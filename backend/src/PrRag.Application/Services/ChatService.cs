@@ -72,7 +72,7 @@ public sealed class ChatService : IChatService
 
         RegisterFunction(
             "create_requisition",
-            "Persists a new purchase requisition to disk as a JSON file. Call it ONLY after the user has explicitly confirmed the drafted requisition; never invent field values — use exactly the values the user provided and validated. Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. Refuses to create a requisition when no existing requisition has the same item + supplier combination.",
+            "Persists a new purchase requisition in the database. Call it ONLY after the user has explicitly confirmed the drafted requisition; never invent field values — use exactly the values the user provided and validated. Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. Refuses to create a requisition when no existing requisition has the same item + supplier combination.",
             (string supplierCode, string item, string description, decimal quantity, string date, string requester, CancellationToken ct) =>
                 CreateRequisitionAsync(supplierCode, item, description, quantity, date, requester, ct));
 
@@ -285,7 +285,7 @@ public sealed class ChatService : IChatService
         if (result.Success)
         {
             ClearSkillState(_activeSession!);
-            return $"Requisition created: {result.FileName}.";
+            return $"Requisition created: {result.RequisitionId}.";
         }
 
         return result.Error!;
@@ -396,7 +396,7 @@ public sealed class ChatService : IChatService
         - search_by_codes: use it when the user references exact ITM-* item codes or SUP* supplier codes.
         - search_semantic: use it when the user asks about requisitions by meaning or description.
         - activate_skill: use it when the user's request matches the intent of one of the available skills listed in the Skills section of this prompt. It loads that skill's instructions into the conversation to guide the workflow.
-        - create_requisition: use it ONLY after the user has explicitly confirmed a drafted purchase requisition, to persist the requisition to disk as a JSON file. Never invent field values; use exactly the values the user provided and that you validated. Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. It refuses to create a requisition when no existing requisition has the same item + supplier combination.
+        - create_requisition: use it ONLY after the user has explicitly confirmed a drafted purchase requisition, to persist the requisition in the database. Never invent field values; use exactly the values the user provided and that you validated. Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. It refuses to create a requisition when no existing requisition has the same item + supplier combination.
 
         When calling search_semantic, first rewrite the user question into a short, keyword-rich query optimized for cosine similarity search against the fields above. Use the full conversation history to disambiguate references such as "that one", "the other", "as we saw earlier", etc. Resolve those references against the earlier turns and incorporate the resolved entities into the query. IMPORTANT: The query must be in english.
 

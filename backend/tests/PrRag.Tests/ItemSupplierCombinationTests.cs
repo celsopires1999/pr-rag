@@ -1,8 +1,11 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
+using PrRag.Application.Domain;
 using PrRag.Application.DTOs;
+using PrRag.Infrastructure.Persistence;
 using Xunit;
 
 namespace PrRag.Tests;
@@ -49,13 +52,18 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         }
     }
 
-    private string RequisitionsDir => Path.Combine(_dataDir, "requisitions");
-
     private static string LastToolResult(FakeChatClient chatClient)
     {
         var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
         var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
         return content.Result?.ToString() ?? string.Empty;
+    }
+
+    private static async Task<List<CreatedRequisition>> CreatedRequisitionsAsync(IServiceProvider provider)
+    {
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PrRagDbContext>();
+        return await db.CreatedRequisitions.AsNoTracking().ToListAsync();
     }
 
     [Fact]
@@ -104,7 +112,7 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         });
 
         Assert.Contains("not registered for that item", LastToolResult(chatClient));
-        Assert.False(Directory.Exists(RequisitionsDir) && Directory.GetFiles(RequisitionsDir, "*.json").Length > 0);
+        Assert.Empty(await CreatedRequisitionsAsync(_provider!));
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)

@@ -83,19 +83,19 @@ The system SHALL make any markdown skill file placed in the skills directory ava
 - **THEN** the skill appears in the manifest and can be activated by the model in subsequent conversations
 
 ### Requirement: Purchase requisition file creation tool
-The system SHALL expose a `create_requisition` tool that persists a confirmed purchase requisition as a JSON file under the configured requisitions directory (default `./requisitions`, set via the `Requisitions__Directory` environment variable and resolving to `/app/requisitions` inside the API image), with the file containing exactly `SupplierCode`, `Item`, `Description`, `Quantity`, `Date`, and `Requester`. The tool SHALL refuse to write when required fields are missing or invalid, SHALL refuse to write when no existing purchase requisition has the same item code AND supplier code combination (verifying the supplier is registered for that item), and SHALL be described to the model as callable only after explicit user confirmation of a drafted requisition.
+The system SHALL expose a `create_requisition` tool that persists a confirmed purchase requisition into a dedicated Postgres schema, with the persisted record containing exactly `SupplierCode`, `Item`, `Description`, `Quantity`, `Date`, and `Requester`. The tool SHALL refuse to persist when required fields are missing or invalid, SHALL refuse to persist when no existing purchase requisition has the same item code AND supplier code combination (verifying the supplier is registered for that item), and SHALL be described to the model as callable only after explicit user confirmation of a drafted requisition.
 
-#### Scenario: Confirmed requisition written to disk
+#### Scenario: Confirmed requisition persisted to the database
 - **WHEN** the model calls `create_requisition` with all six fields present and valid and an existing requisition has the same item and supplier combination
-- **THEN** the system writes a JSON file to the requisitions directory containing exactly those fields and returns the created file name to the model
+- **THEN** the system persists a row in the dedicated Postgres schema containing exactly those fields and returns the created requisition id to the model
 
 #### Scenario: Required field missing or invalid
 - **WHEN** the model calls `create_requisition` with a missing required field or an invalid value (e.g. non-numeric `Quantity`, unparseable `Date`)
-- **THEN** the system does not write any file and returns an error describing the invalid or missing fields
+- **THEN** the system does not persist anything and returns an error describing the invalid or missing fields
 
 #### Scenario: Unknown item-supplier combination refused
 - **WHEN** the model calls `create_requisition` with valid fields but no existing requisition has the same item code and supplier code combination
-- **THEN** the system does not write any file and returns an error stating the supplier is not registered for that item and no requisition was created
+- **THEN** the system does not persist anything and returns an error stating the supplier is not registered for that item and no requisition was created
 
 ### Requirement: Purchase requisition creation skill
 The system SHALL ship a `create-purchase-requisition` skill that guides the user step by step through drafting a new purchase requisition — collecting item code(s), quantity, unit of measure, supplier, expected delivery date, requester, and justification, validating referenced `ITM-*`/`SUP*` codes with the existing search tool and confirming the **combination** of the item code and supplier code exists in the database, and closing with a structured draft for confirmation; once the user confirms, the skill SHALL persist the requisition with the `create_requisition` tool.
@@ -118,4 +118,4 @@ The system SHALL ship a `create-purchase-requisition` skill that guides the user
 
 #### Scenario: User confirms and the requisition is persisted
 - **WHEN** the user confirms the drafted requisition and the model calls `create_requisition` with the collected fields
-- **THEN** the tool writes the JSON file to the requisitions directory and the assistant reports the created file
+- **THEN** the tool persists the requisition to the dedicated Postgres schema and the assistant reports the created requisition id

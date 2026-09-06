@@ -34,7 +34,7 @@ ENV HOME=/tmp
 # /app gets mode 1777 so in-container debuggers and editors that attach with a
 # different UID (e.g. the 1000 range) can still write launch artifacts in the
 # working directory; the sticky bit keeps each user from clobbering others' files.
-RUN mkdir -p /app/reports /app/requisitions \
+RUN mkdir -p /app/reports \
     && chown -R app:app /app \
     && chmod 1777 /app
 

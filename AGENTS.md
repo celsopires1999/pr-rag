@@ -46,7 +46,7 @@ The API enables cross-origin access from the origins in `Cors__AllowedOrigins` (
 ## Key gotchas
 
 - **`demo` profile**: The API service is behind `docker compose --profile demo`. A plain `docker compose up -d` only starts the database. This is intentional — it prevents the OpenAI key from leaking into `docker compose config` output.
-- **Writable mounts `./reports` and `./requisitions`**: the API image runs as the non-root `app` user (UID 1654). On a fresh start Docker may create the bind-mount source dirs owned by `root`, which causes 500s when the requisition tool writes. The runtime entrypoint starts as root, chowns both dirs to `app:app`, and then drops privileges.
+- **Writable mount `./reports`**: the API image runs as the non-root `app` user (UID 1654). On a fresh start Docker may create the bind-mount source dir owned by `root`, which causes 500s when the observability report writes. The runtime entrypoint starts as root, chowns the dir to `app:app`, and then drops privileges.
 - **Skill markers persist across turns**: while a skill is active the returned chat answer is prefixed `[Skill: <skill-name>]` (enforced by `ChatService.ApplySkillMarker`, not just prompt instructions) so the next request's plain-text history can restore the guidance; the marker is dropped once a requisition is created.
 - **Embedding dimension is coupled to model**: `text-embedding-3-small` produces 1536-d vectors. Changing the model requires a new EF Core migration and reindex.
 - **`data/purchase.json`** is a bind-mount volume. The API watches it for changes (FileSystemWatcher + debounce). The file is read-only inside the API container.

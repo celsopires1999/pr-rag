@@ -1,8 +1,11 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
+using PrRag.Application.Domain;
 using PrRag.Application.DTOs;
+using PrRag.Infrastructure.Persistence;
 using Xunit;
 
 namespace PrRag.Tests;
@@ -14,6 +17,7 @@ public class SkillFrameworkTests : IAsyncLifetime
     private readonly string _dbName = $"prrag_test_{Guid.NewGuid():N}";
     private string _connectionString = null!;
     private ServiceProvider? _provider;
+    private FakeEmbeddingService? _embeddings;
     private string _dataDir = null!;
 
     private const string SkillFile = """
@@ -29,13 +33,13 @@ public class SkillFrameworkTests : IAsyncLifetime
         2. Validate item (ITM-*) and supplier (SUP*) codes with search_by_codes and flag any code with no match.
         3. Also call search_by_codes with the item and supplier together to confirm at least one requisition has that exact item + supplier combination before finalizing the draft.
         4. Present a structured draft and ask for explicit confirmation.
-        5. After the user confirms, call create_requisition with exactly the six validated fields and report the created file.
+        5. After the user confirms, call create_requisition with exactly the six validated fields and report the created requisition id.
         """;
 
     public async Task InitializeAsync()
     {
         _connectionString = $"{ConnectionTemplate};Database={_dbName}";
-        (_provider, _, _dataDir) = IntegrationServiceFactory.Create(_connectionString);
+        (_provider, _embeddings, _dataDir) = IntegrationServiceFactory.Create(_connectionString);
         await TestDatabase.MigrateAndReloadTypesAsync(_provider);
 
         var records = new[]
@@ -75,7 +79,19 @@ public class SkillFrameworkTests : IAsyncLifetime
         }
     }
 
-    private string RequisitionsDir => Path.Combine(_dataDir, "requisitions");
+    private static async Task<List<CreatedRequisition>> CreatedRequisitionsAsync(IServiceProvider provider)
+    {
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PrRagDbContext>();
+        return await db.CreatedRequisitions.AsNoTracking().ToListAsync();
+    }
+
+    private static async Task<int> HistoricalRequisitionCountAsync(IServiceProvider provider)
+    {
+        using var scope = provider.CreateScope();
+        var db = scope.ServiceProvider.GetRequiredService<PrRagDbContext>();
+        return await db.PurchaseRequisitions.AsNoTracking().CountAsync();
+    }
 
     private static async Task<RagQueryReport> ReadLastReportAsync(string reportsDir)
     {
@@ -91,6 +107,14 @@ public class SkillFrameworkTests : IAsyncLifetime
         var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
         var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
         return content.Result?.ToString() ?? string.Empty;
+    }
+
+    private static string ExtractRequisitionId(string toolResult)
+    {
+        var marker = "Requisition created: ";
+        var start = toolResult.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"Expected '{marker}' in tool result: {toolResult}");
+        return toolResult[(start + marker.Length)..].TrimEnd('.');
     }
 
     private static FunctionCallContent ActivationCall(string skillName) =>
@@ -212,19 +236,58 @@ public class SkillFrameworkTests : IAsyncLifetime
         Assert.NotEmpty(response.Answer);
         Assert.Contains("Requisition created", LastToolResult(chatClient));
 
-        var file = Assert.Single(Directory.GetFiles(RequisitionsDir, "*.json"));
-        var json = await File.ReadAllTextAsync(file);
-        var written = JsonSerializer.Deserialize<NewPurchaseRequisition>(json)!;
-        Assert.Equal("SUP000001", written.SupplierCode);
-        Assert.Equal("ITM0001", written.Item);
-        Assert.Equal("Hydraulic pump for maintenance.", written.Description);
-        Assert.Equal(3m, written.Quantity);
-        Assert.Equal("2026-10-01", written.Date);
-        Assert.Equal("Ana Souza", written.Requester);
+        var requisitionId = ExtractRequisitionId(LastToolResult(chatClient));
+        var created = await CreatedRequisitionsAsync(_provider!);
+        var stored = Assert.Single(created, r => r.Id.ToString("N") == requisitionId);
+        Assert.Equal("SUP000001", stored.SupplierCode);
+        Assert.Equal("ITM0001", stored.Item);
+        Assert.Equal("Hydraulic pump for maintenance.", stored.Description);
+        Assert.Equal(3m, stored.Quantity);
+        Assert.Equal("2026-10-01", stored.Date);
+        Assert.Equal("Ana Souza", stored.Requester);
     }
 
     [Fact]
-    public async Task Create_requisition_with_invalid_fields_writes_no_file()
+    public async Task Created_requisition_is_isolated_from_historical_dataset()
+    {
+        var historicalBefore = await HistoricalRequisitionCountAsync(_provider!);
+        var embeddingsBefore = _embeddings!.CallCount;
+
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
+        chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_create",
+            "create_requisition",
+            new Dictionary<string, object?>
+            {
+                ["supplierCode"] = "SUP000001",
+                ["item"] = "ITM0001",
+                ["description"] = "Hydraulic pump for maintenance.",
+                ["quantity"] = 3m,
+                ["date"] = "2026-10-01",
+                ["requester"] = "Ana Souza",
+            }));
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a purchase requisition: item ITM0001, qty 3, Acme (SUP000001), delivery 2026-10-01, requester Ana Souza",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        Assert.Single(await CreatedRequisitionsAsync(_provider!));
+
+        // The historical dataset, its embeddings, and ingestion runtime are untouched.
+        Assert.Equal(historicalBefore, await HistoricalRequisitionCountAsync(_provider!));
+        Assert.Equal(embeddingsBefore, _embeddings!.CallCount);
+    }
+
+    [Fact]
+    public async Task Create_requisition_with_invalid_fields_persists_nothing()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
@@ -252,11 +315,11 @@ public class SkillFrameworkTests : IAsyncLifetime
 
         Assert.NotEmpty(response.Answer);
         Assert.Contains("Missing or invalid required fields", LastToolResult(chatClient));
-        Assert.False(Directory.Exists(RequisitionsDir) && Directory.GetFiles(RequisitionsDir, "*.json").Length > 0);
+        Assert.Empty(await CreatedRequisitionsAsync(_provider!));
     }
 
     [Fact]
-    public async Task Create_requisition_for_unknown_item_supplier_combination_writes_no_file()
+    public async Task Create_requisition_for_unknown_item_supplier_combination_persists_nothing()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
@@ -283,7 +346,7 @@ public class SkillFrameworkTests : IAsyncLifetime
         });
 
         Assert.Contains("not registered for that item", LastToolResult(chatClient));
-        Assert.False(Directory.Exists(RequisitionsDir) && Directory.GetFiles(RequisitionsDir, "*.json").Length > 0);
+        Assert.Empty(await CreatedRequisitionsAsync(_provider!));
     }
 
     [Fact]

@@ -1,10 +1,4 @@
-# Purchase Requisition Creation Guard
-
-## Purpose
-
-Guards purchase requisition creation so that a requisition is only written when the supplier is actually registered for the item being requisitioned.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Requisition creation requires existing item-supplier combination
 The system SHALL refuse to create a purchase requisition unless at least one existing purchase requisition in the database has the exact same item code (`Item`) AND supplier code (`SupplierCode`) combination as the one being created; when the combination does not exist, `create_requisition` SHALL not persist anything in the database and SHALL return an error explaining that the supplier is not registered for that item.
