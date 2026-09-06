@@ -14,7 +14,9 @@
       "env": {
         "ASPNETCORE_ENVIRONMENT": "Development",
         "ASPNETCORE_URLS": "http://0.0.0.0:8080",
-        "ConnectionStrings__Default": "Host=db;Port=5432;Database=prrag;Username=prrag;Password=prrag"
+        "ConnectionStrings__Default": "Host=db;Port=5432;Database=prrag;Username=prrag;Password=prrag",
+        "Data__FilePath": "/workspaces/data/purchase.json",
+        "Skills__Directory": "/workspaces/data/skills"
       },
       "envFile": "${workspaceFolder}/.env"
     }

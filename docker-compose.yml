@@ -41,7 +41,7 @@ services:
       RAG__MinSimilarity: ${RAG__MinSimilarity:-0.7}
       Data__FilePath: /data/purchase.json
       Skills__Directory: /data/skills
-      Requisitions__Directory: ${Requisitions__Directory:-/app/requisitions}
+      Requisitions__Directory: /app/requisitions
       Cors__AllowedOrigins: ${CORS__AllowedOrigins:-http://localhost:5173}
     ports:
       - "${API_PORT:-8080}:8080"
