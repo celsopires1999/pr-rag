@@ -116,4 +116,6 @@ app.MapGet("/api/status", async (
 
 app.MapDelete("/api/sessions/{id}", SessionEndpoints.Discard);
 
+app.MapGet("/api/created-requisitions", CreatedRequisitionEndpoints.List);
+
 app.Run();

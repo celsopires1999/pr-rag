@@ -44,6 +44,7 @@ public static class DependencyInjection
             .UseLogging();
 
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
+        services.AddScoped<ICreatedRequisitionQuery, CreatedRequisitionQuery>();
         services.AddScoped<IEmbeddingService, OpenAiEmbeddingService>();
         services.AddSingleton<IRagReportWriter, FileRagReportWriter>();
         services.AddSingleton<ISkillService, SkillsDirectory>();

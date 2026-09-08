@@ -58,6 +58,7 @@ public static class IntegrationServiceFactory
         services.AddSingleton(chatClient);
         services.AddSingleton<IChatClient>(chatClient);
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
+        services.AddScoped<ICreatedRequisitionQuery, CreatedRequisitionQuery>();
 
         var provider = services.BuildServiceProvider();
         return (provider, embeddingService, dataDir);

@@ -165,7 +165,10 @@ public sealed class PurchaseRequisitionTools
             return $"Cannot create requisition: supplier {supplierCode} has no recorded requisition for item {item}. The supplier is not registered for that item, so no requisition was created. Ask the user to confirm the item and supplier.";
         }
 
-        var result = await _requisitionWriter.WriteAsync(requisition, cancellationToken);
+        var result = await _requisitionWriter.WriteAsync(
+            requisition,
+            _turnContext.SessionId,
+            cancellationToken);
 
         if (result.Success)
         {

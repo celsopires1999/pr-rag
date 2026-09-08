@@ -16,5 +16,7 @@ public sealed class CreatedRequisition
 
     public string Requester { get; set; } = string.Empty;
 
+    public string? SessionId { get; set; }
+
     public DateTimeOffset CreatedAt { get; set; } = DateTimeOffset.UtcNow;
 }

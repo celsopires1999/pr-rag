@@ -58,7 +58,7 @@ public sealed class ChatService : IChatService
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
-        _turnContext.Begin(session, topK, minSimilarity);
+        _turnContext.Begin(session, sessionId, topK, minSimilarity);
 
         var messages = BuildTurnMessages(request.Question, created);
         var response = await _runService.RunAsync(messages, session, cancellationToken);
@@ -89,7 +89,7 @@ public sealed class ChatService : IChatService
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
-        _turnContext.Begin(session, topK, minSimilarity);
+        _turnContext.Begin(session, sessionId, topK, minSimilarity);
 
         var messages = BuildTurnMessages(request.Question, created);
         var latestText = new System.Text.StringBuilder();

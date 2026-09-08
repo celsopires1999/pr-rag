@@ -115,6 +115,45 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         Assert.Empty(await CreatedRequisitionsAsync(_provider!));
     }
 
+    [Fact]
+    public async Task Created_requisition_is_attributed_to_the_session_id()
+    {
+        var sessionId = Guid.NewGuid().ToString("N");
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_create",
+            "create_requisition",
+            new Dictionary<string, object?>
+            {
+                ["supplierCode"] = "SUP000001",
+                ["item"] = "ITM0001",
+                ["description"] = "Hydraulic pump refill.",
+                ["quantity"] = 2m,
+                ["date"] = "2026-10-02",
+                ["requester"] = "Ana Souza",
+            }));
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "persist a requisition for SUP000001 ITM0001",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        // The listing scoped to the session must surface the requisition created in it.
+        var query = scope.ServiceProvider.GetRequiredService<ICreatedRequisitionQuery>();
+        var page = await query.QueryAsync(new CreatedRequisitionQueryInput { SessionId = sessionId });
+
+        var created = Assert.Single(page.Items);
+        Assert.Equal("SUP000001", created.SupplierCode);
+        Assert.Equal("ITM0001", created.Item);
+        Assert.Equal(sessionId, created.SessionId);
+    }
+
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)
     {
         var path = Path.Combine(_dataDir, "purchase.json");

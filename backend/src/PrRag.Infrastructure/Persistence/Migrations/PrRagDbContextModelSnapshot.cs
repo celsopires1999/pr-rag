@@ -122,6 +122,11 @@ namespace PrRag.Infrastructure.Persistence.Migrations
                         .HasColumnType("character varying(100)")
                         .HasColumnName("requester");
 
+                    b.Property<string>("SessionId")
+                        .HasMaxLength(64)
+                        .HasColumnType("character varying(64)")
+                        .HasColumnName("session_id");
+
                     b.Property<string>("SupplierCode")
                         .IsRequired()
                         .HasMaxLength(9)

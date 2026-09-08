@@ -12,11 +12,12 @@ public sealed record RequisitionWriteResult(bool Success, string? RequisitionId,
 public interface IRequisitionWriter
 {
     /// <summary>
-    /// Persists a new purchase requisition in the database.
-    /// Returns the created requisition id on success, or an error (persisting
-    /// nothing) for missing or invalid required fields.
+    /// Persists a new purchase requisition in the database, attributing it to
+    /// the optional session id. Returns the created requisition id on success,
+    /// or an error (persisting nothing) for missing or invalid required fields.
     /// </summary>
     Task<RequisitionWriteResult> WriteAsync(
         NewPurchaseRequisition requisition,
+        string? sessionId = null,
         CancellationToken cancellationToken = default);
 }

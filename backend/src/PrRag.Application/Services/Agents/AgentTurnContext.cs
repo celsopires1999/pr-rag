@@ -14,6 +14,9 @@ public sealed class AgentTurnContext
     /// <summary>The session the current turn is running against.</summary>
     public AgentSession? Session { get; set; }
 
+    /// <summary>The client-facing session id the turn belongs to.</summary>
+    public string? SessionId { get; set; }
+
     public int TopK { get; set; }
 
     public double MinSimilarity { get; set; }
@@ -23,9 +26,10 @@ public sealed class AgentTurnContext
 
     public List<RagRetrievedItem> RetrievedItems { get; } = new();
 
-    public void Begin(AgentSession session, int topK, double minSimilarity)
+    public void Begin(AgentSession session, string sessionId, int topK, double minSimilarity)
     {
         Session = session;
+        SessionId = sessionId;
         TopK = topK;
         MinSimilarity = minSimilarity;
         RewrittenQuery = null;

@@ -22,6 +22,7 @@ public sealed class DbRequisitionWriter : IRequisitionWriter
 
     public async Task<RequisitionWriteResult> WriteAsync(
         NewPurchaseRequisition requisition,
+        string? sessionId = null,
         CancellationToken cancellationToken = default)
     {
         var validationError = requisition.Validate();
@@ -39,6 +40,7 @@ public sealed class DbRequisitionWriter : IRequisitionWriter
             Quantity = requisition.Quantity,
             Date = requisition.Date,
             Requester = requisition.Requester,
+            SessionId = sessionId,
             CreatedAt = DateTimeOffset.UtcNow,
         };
 

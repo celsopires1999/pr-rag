@@ -108,6 +108,10 @@ public sealed class PrRagDbContext : DbContext
                 .HasColumnName("requester")
                 .HasMaxLength(100);
 
+            entity.Property(e => e.SessionId)
+                .HasColumnName("session_id")
+                .HasMaxLength(64);
+
             entity.Property(e => e.CreatedAt).HasColumnName("created_at");
         });
     }

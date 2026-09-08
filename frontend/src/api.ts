@@ -5,6 +5,8 @@ import type {
   SystemStatus,
   ChatStreamRequest,
   ApiError,
+  CreatedRequisitionQuery,
+  CreatedRequisitionPage,
 } from './types'
 
 const BASE_URL = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:8080'
@@ -46,6 +48,23 @@ export async function ingest(): Promise<IngestResult> {
 
 export async function status(): Promise<SystemStatus> {
   return request<SystemStatus>('/api/status', { method: 'GET' })
+}
+
+export async function listCreatedRequisitions(
+  query: CreatedRequisitionQuery,
+  signal?: AbortSignal,
+): Promise<CreatedRequisitionPage> {
+  const params = new URLSearchParams()
+  for (const [key, value] of Object.entries(query)) {
+    if (value !== undefined && value !== null && value !== '') {
+      params.set(key, String(value))
+    }
+  }
+  const qs = params.toString()
+  return request<CreatedRequisitionPage>(
+    `/api/created-requisitions${qs ? `?${qs}` : ''}`,
+    { method: 'GET', signal },
+  )
 }
 
 export async function discardSession(sessionId: string): Promise<void> {

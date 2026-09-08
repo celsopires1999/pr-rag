@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { MessageSquare, Activity, Database } from 'lucide-react'
+import { MessageSquare, Activity, Database, ScrollText } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -37,6 +37,14 @@ export function AppSidebar() {
                   <NavLink to="/">
                     <MessageSquare />
                     <span>Chat</span>
+                  </NavLink>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  <NavLink to="/requisitions">
+                    <ScrollText />
+                    <span>Requisitions</span>
                   </NavLink>
                 </SidebarMenuButton>
               </SidebarMenuItem>

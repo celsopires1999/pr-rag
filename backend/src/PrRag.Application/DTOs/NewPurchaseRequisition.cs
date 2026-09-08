@@ -14,6 +14,8 @@ public sealed class NewPurchaseRequisition
 
     public string Requester { get; set; } = string.Empty;
 
+    public string? SessionId { get; set; }
+
     public string? Validate()
     {
         var problems = new List<string>();
