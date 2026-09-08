@@ -7,7 +7,9 @@
 bin/
 obj/
 *.user
-dotnet/        # .NET SDK host cache (e.g. runfile-discovery)
+
+# .NET SDK host cache (e.g. runfile-discovery)
+dotnet/        
 
 # Docker volumes / runtime data (keep the data file in repo via .gitkeep)
 data/*.json
