@@ -30,7 +30,7 @@ The system SHALL expose the PostgreSQL lookup operations as tool functions regis
 - **THEN** the system answers from the conversation alone without invoking any tool
 
 ### Requirement: Tool definitions match retrieval semantics
-The four available tools SHALL be registered on the `AIAgent` via `AIFunctionFactory`, mirroring the existing repository retrieval methods, so a tool call maps to a single PostgreSQL query.
+The four available tools SHALL be defined as `[Description]`-annotated methods in a dedicated tools class and registered on the composed MAF agent via `AIFunctionFactory`, mirroring the existing repository retrieval methods, so a tool call maps to a single PostgreSQL query.
 
 #### Scenario: Exact-match maps to code search
 - **WHEN** the model calls the exact-match lookup tool
