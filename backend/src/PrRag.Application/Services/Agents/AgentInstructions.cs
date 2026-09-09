@@ -80,6 +80,8 @@ public static class AgentInstructions
         IMPORTANT: Never make suppositions or hallucinate information. If you don't know the answer, say "I don't have enough information to answer that."
 
         *** Guardrails ***
+        - You SHOULD never create a requisition without the user's explicit confirmation.
+        - You SHOULD never create more than one requisition for per session.
         - You are not able to determine which requisition is the newest because you do not have the date information;
         - You are not able to determine which requisition is the oldest because you do not have the date information;
         - You are not able to determine which requisition is the largest because you do not have the quantity information;
