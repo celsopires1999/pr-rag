@@ -26,6 +26,9 @@ public sealed class AgentTurnContext
 
     public List<RagRetrievedItem> RetrievedItems { get; } = new();
 
+    /// <summary>Tool invocations recorded by the tool handlers during the turn, in call order.</summary>
+    public List<RagToolCall> ToolCalls { get; } = new();
+
     public void Begin(AgentSession session, string sessionId, int topK, double minSimilarity)
     {
         Session = session;
@@ -34,5 +37,6 @@ public sealed class AgentTurnContext
         MinSimilarity = minSimilarity;
         RewrittenQuery = null;
         RetrievedItems.Clear();
+        ToolCalls.Clear();
     }
 }

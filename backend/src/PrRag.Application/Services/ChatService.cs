@@ -162,6 +162,7 @@ public sealed class ChatService : IChatService
             SkillActivated = skillActivated,
             Answer = answer ?? string.Empty,
             RetrievedItems = _turnContext.RetrievedItems,
+            ToolCalls = _turnContext.ToolCalls,
         };
 
         try

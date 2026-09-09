@@ -108,6 +108,10 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.True(report.RetrievedCount > 0);
         Assert.Equal(response.Answer, report.Answer);
         Assert.Equal("acme hydraulic pump", report.RewrittenQuery);
+
+        var toolCall = Assert.Single(report.ToolCalls);
+        Assert.Equal("search_semantic", toolCall.Name);
+        Assert.Equal("acme hydraulic pump", ((JsonElement)toolCall.Arguments["query"]!).GetString());
     }
 
     [Fact]
@@ -127,11 +131,41 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.True(report.UsedNoContextFallback);
         Assert.Equal(0, report.RetrievedCount);
         Assert.Empty(report.RetrievedItems);
+        Assert.Empty(report.ToolCalls);
         Assert.Equal(response.Answer, report.Answer);
         Assert.Equal("SUP999999", report.Question);
         Assert.Equal(5, report.TopK);
         Assert.False(report.TopKFromRequest);
         Assert.Equal(0.7, report.MinSimilarity);
         Assert.False(report.MinSimilarityFromRequest);
+    }
+
+    [Fact]
+    public async Task Report_records_each_tool_invocation_in_order_with_arguments()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_1",
+            "search_by_codes",
+            new Dictionary<string, object?> { ["items"] = new[] { "ITM0001" } }));
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_2",
+            "search_semantic",
+            new Dictionary<string, object?> { ["query"] = "hydraulic pump" }));
+
+        var response = await chat.AnswerAsync(new ChatRequest { Question = "find the pump" });
+
+        var report = await ReadLastReportAsync(ReportsDir);
+
+        Assert.True(response.RetrievedCount > 0);
+        Assert.Equal(2, report.ToolCalls.Count);
+        Assert.Equal("search_by_codes", report.ToolCalls[0].Name);
+        var items = (JsonElement)report.ToolCalls[0].Arguments["items"]!;
+        Assert.Equal("ITM0001", items[0].GetString());
+        Assert.Equal("search_semantic", report.ToolCalls[1].Name);
+        Assert.Equal("hydraulic pump", ((JsonElement)report.ToolCalls[1].Arguments["query"]!).GetString());
     }
 }

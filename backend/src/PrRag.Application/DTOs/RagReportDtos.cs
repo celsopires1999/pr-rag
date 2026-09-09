@@ -30,6 +30,8 @@ public sealed class RagQueryReport
 
     public List<RagRetrievedItem> RetrievedItems { get; set; } = new();
 
+    public List<RagToolCall> ToolCalls { get; set; } = new();
+
     public string Answer { get; set; } = string.Empty;
 
     public int RetrievedCount { get; set; }
@@ -63,4 +65,12 @@ public sealed class RagRetrievedItem
         Description = r.Description,
         Similarity = similarity,
     };
+}
+
+public sealed class RagToolCall
+{
+    public string Name { get; set; } = string.Empty;
+
+    public IReadOnlyDictionary<string, object?> Arguments { get; set; } =
+        new Dictionary<string, object?>();
 }

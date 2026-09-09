@@ -88,12 +88,27 @@ public sealed class PurchaseRequisitionTools
         _tools.Add(function);
     }
 
+    private void RecordToolCall(string name, IDictionary<string, object?> arguments)
+    {
+        _turnContext.ToolCalls.Add(new RagToolCall
+        {
+            Name = name,
+            Arguments = new Dictionary<string, object?>(arguments),
+        });
+    }
+
     [Description(SearchByCodesDescription)]
     private async Task<IReadOnlyList<RagRetrievedItem>> SearchByCodesAsync(
         IReadOnlyList<string>? items,
         IReadOnlyList<string>? suppliers,
         CancellationToken cancellationToken)
     {
+        RecordToolCall("search_by_codes", new Dictionary<string, object?>
+        {
+            ["items"] = items,
+            ["suppliers"] = suppliers,
+        });
+
         var results = await _repository.SearchByCodesAsync(items, suppliers, _turnContext.TopK, cancellationToken);
         var mapped = results.Select(r => RagRetrievedItem.From(r, null)).ToList();
         _turnContext.RetrievedItems.AddRange(mapped);
@@ -105,6 +120,11 @@ public sealed class PurchaseRequisitionTools
         string query,
         CancellationToken cancellationToken)
     {
+        RecordToolCall("search_semantic", new Dictionary<string, object?>
+        {
+            ["query"] = query,
+        });
+
         _turnContext.RewrittenQuery = query;
 
         var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
@@ -117,6 +137,11 @@ public sealed class PurchaseRequisitionTools
     [Description(ActivateSkillDescription)]
     private async Task<string> ActivateSkillAsync(string name, CancellationToken cancellationToken)
     {
+        RecordToolCall("activate_skill", new Dictionary<string, object?>
+        {
+            ["name"] = name,
+        });
+
         var skill = await _skillService.GetSkillAsync(name, cancellationToken);
         if (skill is null)
         {
@@ -139,6 +164,16 @@ public sealed class PurchaseRequisitionTools
         string requester,
         CancellationToken cancellationToken)
     {
+        RecordToolCall("create_requisition", new Dictionary<string, object?>
+        {
+            ["supplierCode"] = supplierCode,
+            ["item"] = item,
+            ["description"] = description,
+            ["quantity"] = quantity,
+            ["date"] = date,
+            ["requester"] = requester,
+        });
+
         var requisition = new NewPurchaseRequisition
         {
             SupplierCode = supplierCode,

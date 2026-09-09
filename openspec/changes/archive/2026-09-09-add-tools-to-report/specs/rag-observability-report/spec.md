@@ -1,10 +1,4 @@
-# RAG Observability Report
-
-## Purpose
-
-Per-request observability tracing for the RAG chat pipeline, capturing question-to-answer traces and persisting them as machine-readable report files for debugging and analysis.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Per-request RAG observability report
 The system SHALL capture a per-request observability trace for each answered chat question, covering the full question-to-answer pipeline, and SHALL persist it as a machine-readable file in a local, non-committed output directory. The report SHALL include the timestamp, the original question, the effective `top_k` and `min_similarity` (noting whether each came from the request or the configured defaults), the rewritten query when vector search is performed, the retrieved requisitions with their similarity scores, the tools invoked during the turn together with their arguments, and the final answer sent to the user.
@@ -32,10 +26,3 @@ The system SHALL capture a per-request observability trace for each answered cha
 #### Scenario: Report shows no tools when none are invoked
 - **WHEN** the answer is produced without invoking any tool
 - **THEN** the report records an empty tool call list
-
-### Requirement: Report files not committed
-The generated report files SHALL be written outside version control so that they are never committed with the source code, while the code that produces them remains tracked.
-
-#### Scenario: Reports excluded from git
-- **WHEN** reports are generated in the configured output directory
-- **THEN** the directory is excluded by `.gitignore` and report files do not appear in commits
