@@ -30,6 +30,11 @@ public interface IPurchaseRequisitionRepository
         string supplierCode,
         CancellationToken cancellationToken = default);
 
+    Task<IReadOnlyList<ItemSupplierMasterResult>> SearchItemSupplierMasterAsync(
+        string? item,
+        string? supplierCode,
+        CancellationToken cancellationToken = default);
+
     Task<int> CountAsync(CancellationToken cancellationToken = default);
 
     Task<int> CountEmbeddedAsync(CancellationToken cancellationToken = default);

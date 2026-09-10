@@ -33,6 +33,12 @@ public sealed class PurchaseRequisitionTools
         "Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. " +
         "Refuses to create a requisition when no existing requisition has the same item + supplier combination.";
 
+    private const string SearchItemSupplierMasterDescription =
+        "Search distinct item-supplier master-data pairs. Returns SupplierCode, SupplierName, Item, and ItemName " +
+        "for each distinct combination. Provide at least one of item or supplier. " +
+        "Use this when the user asks about which suppliers carry an item or which items a supplier provides, " +
+        "without needing requisition details.";
+
     private readonly IEmbeddingService _embeddingService;
     private readonly IPurchaseRequisitionRepository _repository;
     private readonly ISkillService _skillService;
@@ -72,6 +78,11 @@ public sealed class PurchaseRequisitionTools
             CreateRequisitionDescription,
             (string supplierCode, string item, string description, decimal quantity, string date, string requester, CancellationToken ct) =>
                 CreateRequisitionAsync(supplierCode, item, description, quantity, date, requester, ct));
+        RegisterFunction(
+            "search_item_supplier_master",
+            SearchItemSupplierMasterDescription,
+            (string? item = null, string? supplier = null, CancellationToken ct = default) =>
+                SearchItemSupplierMasterAsync(item, supplier, ct));
     }
 
     /// <summary>The fixed tool list bound to the agent.</summary>
@@ -212,5 +223,25 @@ public sealed class PurchaseRequisitionTools
         }
 
         return result.Error!;
+    }
+
+    [Description(SearchItemSupplierMasterDescription)]
+    private async Task<IReadOnlyList<ItemSupplierMasterResult>> SearchItemSupplierMasterAsync(
+        [Description("The item code")] string? item,
+        [Description("The supplier code")] string? supplier,
+        CancellationToken cancellationToken)
+    {
+        RecordToolCall("search_item_supplier_master", new Dictionary<string, object?>
+        {
+            ["item"] = item,
+            ["supplier"] = supplier,
+        });
+
+        if (item is null && supplier is null)
+        {
+            return Array.Empty<ItemSupplierMasterResult>();
+        }
+
+        return await _repository.SearchItemSupplierMasterAsync(item, supplier, cancellationToken);
     }
 }

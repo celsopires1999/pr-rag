@@ -136,6 +136,50 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<ItemSupplierMasterResult>> SearchItemSupplierMasterAsync(
+        string? item,
+        string? supplierCode,
+        CancellationToken cancellationToken = default)
+    {
+        if (item is null && supplierCode is null)
+        {
+            return Array.Empty<ItemSupplierMasterResult>();
+        }
+
+        var conditions = new List<string>();
+        var parameters = new List<object>();
+        var paramIndex = 0;
+
+        if (item is not null)
+        {
+            conditions.Add($"item = @p{paramIndex}");
+            parameters.Add(item);
+            paramIndex++;
+        }
+
+        if (supplierCode is not null)
+        {
+            conditions.Add($"supplier_code = @p{paramIndex}");
+            parameters.Add(supplierCode);
+            paramIndex++;
+        }
+
+        var whereClause = conditions.Count > 0 ? $"WHERE {string.Join(" AND ", conditions)}" : "";
+        var sql = $"""
+            SELECT DISTINCT
+                supplier_code AS "SupplierCode",
+                supplier_name AS "SupplierName",
+                item AS "Item",
+                item_name AS "ItemName"
+            FROM purchase_requisitions
+            {whereClause}
+            ORDER BY supplier_code, item
+            """;
+
+        return await _db.Database.SqlQueryRaw<ItemSupplierMasterResult>(sql, parameters.ToArray())
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<bool> ExistsItemSupplierCombinationAsync(
         string item,
         string supplierCode,
