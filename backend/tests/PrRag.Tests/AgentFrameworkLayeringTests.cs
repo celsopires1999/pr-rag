@@ -60,20 +60,21 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Purchase_requisition_tools_expose_the_four_fixed_tools()
+    public async Task Purchase_requisition_tools_expose_the_fixed_tools()
     {
         using var scope = _provider!.CreateScope();
         var tools = scope.ServiceProvider.GetRequiredService<PurchaseRequisitionTools>();
 
         var names = tools.All.Select(t => t.Name).ToHashSet();
 
-        Assert.Equal(4, tools.All.Count);
+        Assert.Equal(5, tools.All.Count);
         Assert.True(names.IsSupersetOf(new[]
         {
             "search_by_codes",
             "search_semantic",
             "activate_skill",
             "create_requisition",
+            "get_suppliers_by_item",
         }));
     }
 

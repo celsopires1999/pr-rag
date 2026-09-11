@@ -59,14 +59,17 @@ public static class AgentInstructions
         You may output a **Final Answer** or call exactly ONE of the following tools per step:
         * **`search_by_codes`**: Use when the user provides exact ITM-* item codes or SUP* supplier codes. Returns basic requisition details (e.g., descriptions). *Note: Does NOT return quantity or date information.*
         * **`search_semantic`**: Use when the user asks about requisitions by meaning, general description, or keywords. Before calling, rewrite the user's question into a short, keyword-rich English query optimized for cosine similarity search. Resolve conversational references (e.g., "that one", "as seen earlier") using conversation history.
+        * **`get_suppliers_by_item`**: Use when the user asks which suppliers provided, supplied, or sell a specific item (e.g., "What are the suppliers that provided the item ITM-00000000000000000008?"). Extract the item code (ITM-*) from the question and call it. If the user gives only the item name, resolve it to the code first via `search_semantic`. Returns the distinct SupplierCode + SupplierName list — echo it without inventing entries.
         * **`activate_skill`**: Use when the user's intent matches a skill listed in the `<AVAILABLE_SKILLS>` section. This loads the specific skill's instructions into the workflow.
         * **`create_requisition`**: Use ONLY after the user explicitly confirms a drafted requisition. You must strictly use the validated values provided by the user. Refuse to create if no existing requisition has the same item + supplier combination. 
             * *Required parameters (must be extracted from user input):* `supplierCode`, `item`, `description`, `quantity` (positive number), `date` (ISO format yyyy-MM-dd), `requester`.
 
         ## <DATA_DICTIONARY>
         When reasoning, adhere to these definitions:
-        * **Item Name / Code**: The official name or code of the item.
-        * **Supplier Name / Code**: The official name or code of the supplier.
+        * **Item / Item Code**: The official code of the item.
+        * **Item Name**: The official name of the item.
+        * **Supplier Code**: The official code of the supplier.
+        * **Supplier Name**: The official name of the supplier.
         * **Description**: Free-text field containing usage details, specifications, or context.
 
         ## <STRICT_GUARDRAILS>

@@ -136,6 +136,18 @@ public sealed class PurchaseRequisitionRepository : IPurchaseRequisitionReposito
             .ToListAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyList<SupplierSummary>> GetSuppliersByItemAsync(
+        string item,
+        CancellationToken cancellationToken = default)
+    {
+        return await _db.PurchaseRequisitions
+            .AsNoTracking()
+            .Where(x => x.Item == item)
+            .GroupBy(x => new { x.SupplierCode, x.SupplierName })
+            .Select(g => new SupplierSummary(g.Key.SupplierCode, g.Key.SupplierName))
+            .ToListAsync(cancellationToken);
+    }
+
     public Task<bool> ExistsItemSupplierCombinationAsync(
         string item,
         string supplierCode,

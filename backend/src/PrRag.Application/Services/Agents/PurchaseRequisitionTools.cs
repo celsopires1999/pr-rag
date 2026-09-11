@@ -33,6 +33,12 @@ public sealed class PurchaseRequisitionTools
         "Required parameters: supplierCode, item, description, quantity (a positive number), date (ISO format yyyy-MM-dd), requester. " +
         "Refuses to create a requisition when no existing requisition has the same item + supplier combination.";
 
+    private const string GetSuppliersByItemDescription =
+        "Returns the distinct list of suppliers (SupplierCode + SupplierName) that supplied the given item. " +
+        "Use it when the user asks which suppliers provided, supplied, or sell a specific item. Pass the item code " +
+        "(ITM-*) extracted from the question; resolve an item name to its code first via search_by_codes when needed. " +
+        "Each supplier appears exactly once.";
+
     private readonly IEmbeddingService _embeddingService;
     private readonly IPurchaseRequisitionRepository _repository;
     private readonly ISkillService _skillService;
@@ -72,6 +78,10 @@ public sealed class PurchaseRequisitionTools
             CreateRequisitionDescription,
             (string supplierCode, string item, string description, decimal quantity, string date, string requester, CancellationToken ct) =>
                 CreateRequisitionAsync(supplierCode, item, description, quantity, date, requester, ct));
+        RegisterFunction(
+            "get_suppliers_by_item",
+            GetSuppliersByItemDescription,
+            (string item, CancellationToken ct) => GetSuppliersByItemAsync(item, ct));
     }
 
     /// <summary>The fixed tool list bound to the agent.</summary>
@@ -213,5 +223,19 @@ public sealed class PurchaseRequisitionTools
         }
 
         return result.Error!;
+    }
+
+    [Description(GetSuppliersByItemDescription)]
+    private async Task<IReadOnlyList<SupplierSummary>> GetSuppliersByItemAsync(
+        [Description("The item code (ITM-*) to look up suppliers for")] string item,
+        CancellationToken cancellationToken)
+    {
+        RecordToolCall("get_suppliers_by_item", new Dictionary<string, object?>
+        {
+            ["item"] = item,
+        });
+
+        var suppliers = await _repository.GetSuppliersByItemAsync(item, cancellationToken);
+        return suppliers;
     }
 }
