@@ -99,8 +99,8 @@ public sealed class PurchaseRequisitionTools
 
     [Description(SearchByCodesDescription)]
     private async Task<IReadOnlyList<RagRetrievedItem>> SearchByCodesAsync(
-        IReadOnlyList<string>? items,
-        IReadOnlyList<string>? suppliers,
+        [Description("The item codes to search for")] IReadOnlyList<string>? items,
+        [Description("The supplier codes to search for")] IReadOnlyList<string>? suppliers,
         CancellationToken cancellationToken)
     {
         RecordToolCall("search_by_codes", new Dictionary<string, object?>
@@ -117,7 +117,7 @@ public sealed class PurchaseRequisitionTools
 
     [Description(SearchSemanticDescription)]
     private async Task<IReadOnlyList<RagRetrievedItem>> SearchSemanticAsync(
-        string query,
+        [Description("The query to search for")] string query,
         CancellationToken cancellationToken)
     {
         RecordToolCall("search_semantic", new Dictionary<string, object?>
@@ -135,7 +135,8 @@ public sealed class PurchaseRequisitionTools
     }
 
     [Description(ActivateSkillDescription)]
-    private async Task<string> ActivateSkillAsync(string name, CancellationToken cancellationToken)
+    private async Task<string> ActivateSkillAsync(
+        [Description("The name of the skill to activate")] string name, CancellationToken cancellationToken)
     {
         RecordToolCall("activate_skill", new Dictionary<string, object?>
         {
@@ -156,12 +157,12 @@ public sealed class PurchaseRequisitionTools
 
     [Description(CreateRequisitionDescription)]
     private async Task<string> CreateRequisitionAsync(
-        string supplierCode,
-        string item,
-        string description,
-        decimal quantity,
-        string date,
-        string requester,
+        [Description("The code of the supplier")] string supplierCode,
+        [Description("The code of the item")] string item,
+        [Description("The description of the requisition")] string description,
+        [Description("The quantity of the item")] decimal quantity,
+        [Description("The date of the requisition")] string date,
+        [Description("The requester of the requisition")] string requester,
         CancellationToken cancellationToken)
     {
         RecordToolCall("create_requisition", new Dictionary<string, object?>
