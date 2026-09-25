@@ -1,3 +1,5 @@
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
 
 namespace PrRag.Tests;
@@ -27,6 +29,21 @@ public sealed class FakeChatClient : IChatClient
     private int _toolCallConsumed;
     private int _scriptedIndex;
 
+    /// <summary>
+    /// Rewinds the script so a later turn of the same session can be scripted
+    /// from the start. The client is a singleton shared across scopes, so
+    /// <see cref="ScriptedToolCalls"/> alone cannot express "turn 2 does this".
+    /// </summary>
+    public void ResetScript()
+    {
+        lock (_lock)
+        {
+            ScriptedToolCalls.Clear();
+            _scriptedIndex = 0;
+            _toolCallConsumed = 0;
+        }
+    }
+
     public string LastPrompt
     {
         get { lock (_lock) { return _lastPrompt; } }
@@ -40,6 +57,25 @@ public sealed class FakeChatClient : IChatClient
     public IReadOnlyList<ChatMessage> LastMessages
     {
         get { lock (_lock) { return _messages.ToList(); } }
+    }
+
+    /// <summary>
+    /// The most recent tool result the agent loop produced, normalized to JSON
+    /// text so assertions do not depend on which concrete type the AI function
+    /// layer's result marshalling happened to produce.
+    /// </summary>
+    public string LastToolResultJson()
+    {
+        var toolMessage = LastMessages.Last(m => m.Role == ChatRole.Tool);
+        var result = toolMessage.Contents.OfType<FunctionResultContent>().Last().Result;
+
+        return result switch
+        {
+            string text => text,
+            JsonElement element => element.GetRawText(),
+            JsonNode node => node.ToJsonString(),
+            _ => JsonSerializer.Serialize(result),
+        };
     }
 
     public Task<ChatResponse> GetResponseAsync(

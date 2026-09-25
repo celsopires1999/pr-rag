@@ -16,6 +16,20 @@ public sealed class NewPurchaseRequisition
 
     public string? SessionId { get; set; }
 
+    /// <summary>
+    /// Builds the persistence payload from a staged draft, so the values written
+    /// are the confirmed ones rather than whatever the model re-sent.
+    /// </summary>
+    public static NewPurchaseRequisition From(Domain.RequisitionDraft draft) => new()
+    {
+        SupplierCode = draft.SupplierCode,
+        Item = draft.Item,
+        Description = draft.Description,
+        Quantity = draft.Quantity,
+        Date = draft.Date,
+        Requester = draft.Requester,
+    };
+
     public string? Validate()
     {
         var problems = new List<string>();

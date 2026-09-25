@@ -29,6 +29,23 @@ public sealed class AgentTurnContext
     /// <summary>Tool invocations recorded by the tool handlers during the turn, in call order.</summary>
     public List<RagToolCall> ToolCalls { get; } = new();
 
+    /// <summary>Set when a requisition draft was staged during this turn.</summary>
+    public bool DraftStaged { get; set; }
+
+    /// <summary>Set when a requisition draft was presented for confirmation during this turn.</summary>
+    public bool DraftPresented { get; set; }
+
+    /// <summary>Set when the user confirmed a requisition draft during this turn.</summary>
+    public bool DraftConfirmed { get; set; }
+
+    /// <summary>
+    /// Set when a <c>create_requisition</c> call actually persisted a requisition.
+    /// A latch rather than a read of the session draft state, because a
+    /// successful creation clears the draft and the report still has to show
+    /// that a confirmation preceded it.
+    /// </summary>
+    public bool RequisitionPersisted { get; set; }
+
     public void Begin(AgentSession session, string sessionId, int topK, double minSimilarity)
     {
         Session = session;
@@ -38,5 +55,9 @@ public sealed class AgentTurnContext
         RewrittenQuery = null;
         RetrievedItems.Clear();
         ToolCalls.Clear();
+        DraftStaged = false;
+        DraftPresented = false;
+        DraftConfirmed = false;
+        RequisitionPersisted = false;
     }
 }

@@ -16,10 +16,12 @@ public static class AgentInstructions
 
     private const string SkillsGuide =
         """
-        Available skills guide recurring workflows. If the user's request matches a skill's intent, call
-        activate_skill to load it and then follow its instructions step by step. A skill only adds
-        conversational guidance; it NEVER adds, removes, or changes the tools available to you. If no
-        skill matches, answer normally without activating one.
+        Available skills guide recurring workflows. When the user's request matches a skill's intent — in any wording,
+        however plainly they put it — call activate_skill on your first step and then follow that skill's instructions
+        step by step. A matching skill turns an improvised back-and-forth into a guided flow that collects the right
+        information in the right order, so activating one is worth a step. A skill only adds conversational guidance; it
+        NEVER adds, removes, or changes the tools available to you, and no tool or guardrail depends on whether you
+        activated a skill. If no skill matches, answer normally without activating one.
         """;
 
     /// <summary>
@@ -28,9 +30,20 @@ public static class AgentInstructions
     /// </summary>
     public static string ComposeSystemPrompt(IReadOnlyList<SkillManifestEntry> manifest)
     {
-        var skillsSection = manifest.Count == 0
-            ? "No skills are available."
-            : string.Join("\n", manifest.Select(s => $"- {s.Name}: {s.Description}"));
+        // With no skills loaded the guide is omitted rather than left to
+        // contradict "No skills are available." by telling the model to call
+        // activate_skill for a matching intent.
+        if (manifest.Count == 0)
+        {
+            return $"""
+                {CoreInstructions}
+
+                ## <AVAILABLE_SKILLS>
+                No skills are available.
+                """;
+        }
+
+        var skillsSection = string.Join("\n", manifest.Select(s => $"- {s.Name}: {s.Description}"));
 
         return $"""
             {CoreInstructions}
@@ -60,9 +73,16 @@ public static class AgentInstructions
         * **`search_by_codes`**: Use when the user provides exact ITM-* item codes or SUP* supplier codes. Returns basic requisition details (e.g., descriptions). *Note: Does NOT return quantity or date information.*
         * **`search_semantic`**: Use when the user asks about requisitions by meaning, general description, or keywords. Before calling, rewrite the user's question into a short, keyword-rich English query optimized for cosine similarity search. Resolve conversational references (e.g., "that one", "as seen earlier") using conversation history.
         * **`get_suppliers_by_item`**: Use when the user asks which suppliers provided, supplied, or sell a specific item (e.g., "What are the suppliers that provided the item ITM-00000000000000000008?"). Extract the item code (ITM-*) from the question and call it. If the user gives only the item name, resolve it to the code first via `search_semantic`. Returns the distinct SupplierCode + SupplierName list — echo it without inventing entries.
-        * **`activate_skill`**: Use when the user's intent matches a skill listed in the `<AVAILABLE_SKILLS>` section. This loads the specific skill's instructions into the workflow.
-        * **`create_requisition`**: Use ONLY after the user explicitly confirms a drafted requisition. You must strictly use the validated values provided by the user. Refuse to create if no existing requisition has the same item + supplier combination. 
+        * **`activate_skill`**: You MUST call this whenever the user's request matches a skill listed in `<AVAILABLE_SKILLS>`, in ANY wording. This includes the plainest phrasings — "I need to create a purchase requisition", "create a new requisition", "draft a requisition", "I want to place a purchase request" — not only requests that name the skill. Activating a matching skill is how you produce a guided, step-by-step conversation instead of improvising one, so do it on the first step rather than trying to handle the workflow yourself.
+        * **`create_requisition_draft`**: Stage the six requisition fields once you have collected them from the user. Writes nothing to the database.
+        * **`confirm_requisition_draft`**: Record the user's explicit yes after you have presented the staged draft and asked for confirmation.
+        * **`create_requisition`**: Persist the requisition. It is REFUSED unless a draft the user confirmed exists, so it is your LAST step, never your first.
             * *Required parameters (must be extracted from user input):* `supplierCode`, `item`, `description`, `quantity` (positive number), `date` (ISO format yyyy-MM-dd), `requester`.
+
+        IMPORTANT: always check if there is a matching skill before taking any other action. If a skill matches, call `activate_skill` and follow its instructions step by step. Do not attempt to handle the workflow yourself.
+
+        Never call `create_requisition` directly, and never treat the user's listing of the fields as their
+        confirmation of the draft. A field list is not consent: the user must respond to the draft you presented.
 
         ## <DATA_DICTIONARY>
         When reasoning, adhere to these definitions:

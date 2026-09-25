@@ -28,6 +28,22 @@ public sealed class RagQueryReport
 
     public bool SkillActivated { get; set; }
 
+    /// <summary>Whether a requisition draft was staged during the turn.</summary>
+    public bool RequisitionDraftStaged { get; set; }
+
+    /// <summary>Whether a requisition draft is currently presented to the user.</summary>
+    public bool RequisitionDraftPresented { get; set; }
+
+    /// <summary>Whether a requisition draft was confirmed by the user.</summary>
+    public bool RequisitionDraftConfirmed { get; set; }
+
+    /// <summary>
+    /// Whether a <c>create_requisition</c> call in this turn actually persisted a
+    /// requisition. False when the call was refused — most importantly when it
+    /// was refused for want of a confirmed draft.
+    /// </summary>
+    public bool RequisitionPersisted { get; set; }
+
     public List<RagRetrievedItem> RetrievedItems { get; set; } = new();
 
     public List<RagToolCall> ToolCalls { get; set; } = new();

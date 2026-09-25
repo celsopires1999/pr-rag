@@ -1,6 +1,6 @@
 ---
 name: create-purchase-requisition
-description: Use this skill ONLY when the user wants to CREATE a new purchase requisition, draft a new one, or register a new item/supplier on a requisition. Do not use it for questions about existing requisitions.
+description: Guides the user through creating a new purchase requisition, from collecting the fields to confirming the draft and persisting it. Use it whenever the user wants to create, draft, raise, or place a new purchase requisition or purchase request, however they phrase it.
 version: 1
 ---
 
@@ -44,13 +44,17 @@ Collect, one question at a time, skipping any field the user has already provide
   "Requester": "..."
 }
 ```
-7. ONLY after the user explicitly confirms, call `create_requisition` with exactly the six validated fields (SupplierCode, ItemCode, Description, Quantity, Date, Requester). Do not invent or modify any value.
-8. Report the created requisition id returned by `create_requisition` to the user.
-9. If the requisition cannot be created for any reason, report the error to the user and ask them to confirm or correct the fields before trying again. Show the draft again for confirmation before retrying.
+7. Call `create_requisition_draft` with the six validated fields (SupplierCode, Item, Description, Quantity, Date, Requester). It stages the draft in this session and writes nothing to the database.
+8. Present the staged draft back to the user as the structured summary above and explicitly ask them to confirm it. When they answer yes, call `confirm_requisition_draft` with their answer.
+9. ONLY after `confirm_requisition_draft` reports a recorded confirmation, call `create_requisition` with exactly the same six values. Do not invent or modify any value. A `create_requisition` call without a confirmed draft is refused and writes nothing.
+10. Report the created requisition id returned by `create_requisition` to the user.
+11. If the user changes any field after confirming, call `create_requisition_draft` again with the corrected values and have them confirm the revised draft; the earlier confirmation no longer applies.
+12. If the requisition cannot be created for any reason, report the error to the user and ask them to confirm or correct the fields before trying again. Show the draft again for confirmation before retrying.
 
 # Guardrails
 
-- Never call `create_requisition` without explicit user confirmation.
+- Never call `create_requisition` without a recorded confirmation from `confirm_requisition_draft`. The tool enforces this itself, so skipping the step does not create the requisition — it only wastes the user's turn.
+- A user listing the six fields is NOT a confirmation. They must answer the draft you presented.
 - Never invent a value for any field. If the user will not provide a required field, say you cannot create the requisition.
 - The requisition CANNOT be created when the item + supplier combination has no existing requisition in the database, even if the item code and the supplier code each exist individually. If the combination does not exist, do not call `create_requisition`; warn the user and ask them to confirm or correct the item or supplier.
-- The guardrails from the base system prompt always remain in effect.
+- These steps and the guardrails from the base system prompt both remain in effect whether or not this skill is active.

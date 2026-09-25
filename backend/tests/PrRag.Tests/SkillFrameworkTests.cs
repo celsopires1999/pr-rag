@@ -102,19 +102,19 @@ public class SkillFrameworkTests : IAsyncLifetime
         return JsonSerializer.Deserialize<RagQueryReport>(json)!;
     }
 
-    private static string LastToolResult(FakeChatClient chatClient)
-    {
-        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
-        var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
-        return content.Result?.ToString() ?? string.Empty;
-    }
+    private static string LastToolResult(FakeChatClient chatClient) =>
+        chatClient.LastToolResultJson();
 
     private static string ExtractRequisitionId(string toolResult)
     {
-        var marker = "Requisition created: ";
-        var start = toolResult.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"Expected '{marker}' in tool result: {toolResult}");
-        return toolResult[(start + marker.Length)..].TrimEnd('.');
+        using var document = JsonDocument.Parse(toolResult);
+        var result = document.RootElement;
+
+        Assert.True(
+            result.GetProperty("success").GetBoolean(),
+            $"Expected a successful create_requisition result: {toolResult}");
+
+        return result.GetProperty("requisitionId").GetString()!;
     }
 
     private static FunctionCallContent ActivationCall(string skillName) =>
@@ -213,18 +213,7 @@ public class SkillFrameworkTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
         chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = "SUP000001",
-                ["item"] = "ITM0001",
-                ["description"] = "Hydraulic pump for maintenance.",
-                ["quantity"] = 3m,
-                ["date"] = "2026-10-01",
-                ["requester"] = "Ana Souza",
-            }));
+        RequisitionFlow.ScriptConfirmedCreation(chatClient.ScriptedToolCalls);
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -259,18 +248,7 @@ public class SkillFrameworkTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
         chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = "SUP000001",
-                ["item"] = "ITM0001",
-                ["description"] = "Hydraulic pump for maintenance.",
-                ["quantity"] = 3m,
-                ["date"] = "2026-10-01",
-                ["requester"] = "Ana Souza",
-            }));
+        RequisitionFlow.ScriptConfirmedCreation(chatClient.ScriptedToolCalls);
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -287,56 +265,45 @@ public class SkillFrameworkTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Create_requisition_with_invalid_fields_persists_nothing()
+    public async Task Draft_with_invalid_fields_persists_nothing()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = string.Empty,
-                ["item"] = "ITM0001",
-                ["description"] = "Hydraulic pump for maintenance.",
-                ["quantity"] = 3m,
-                ["date"] = "not-a-date",
-                ["requester"] = "Ana Souza",
-            }));
+        // Field validation happens when the draft is staged: an invalid draft
+        // can never reach the confirmed state, so create_requisition cannot
+        // later persist it.
+        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Draft(
+            supplierCode: string.Empty,
+            date: "not-a-date"));
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
-            Question = "persist a requisition",
+            Question = "stage a requisition draft",
             TopK = 5,
             MinSimilarity = 0,
         });
 
         Assert.NotEmpty(response.Answer);
         Assert.Contains("Missing or invalid required fields", LastToolResult(chatClient));
+        Assert.Contains("\"staged\":false", LastToolResult(chatClient).Replace(" ", ""));
         Assert.Empty(await CreatedRequisitionsAsync(_provider!));
     }
 
     [Fact]
-    public async Task Create_requisition_for_unknown_item_supplier_combination_persists_nothing()
+    public async Task Confirmed_draft_with_unknown_item_supplier_combination_persists_nothing()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = "SUP000002",
-                ["item"] = "ITM9999",
-                ["description"] = "Hydraulic pump for maintenance.",
-                ["quantity"] = 3m,
-                ["date"] = "2026-10-01",
-                ["requester"] = "Ana Souza",
-            }));
+        // The user confirmed this draft, so the confirmation gate is satisfied.
+        // The combination guard is independent of it and must still refuse.
+        RequisitionFlow.ScriptConfirmedCreation(
+            chatClient.ScriptedToolCalls,
+            supplierCode: "SUP000002",
+            item: "ITM9999");
 
         await chat.AnswerAsync(new ChatRequest
         {

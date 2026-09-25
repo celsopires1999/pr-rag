@@ -52,12 +52,8 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         }
     }
 
-    private static string LastToolResult(FakeChatClient chatClient)
-    {
-        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
-        var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
-        return content.Result?.ToString() ?? string.Empty;
-    }
+    private static string LastToolResult(FakeChatClient chatClient) =>
+        chatClient.LastToolResultJson();
 
     private static async Task<List<CreatedRequisition>> CreatedRequisitionsAsync(IServiceProvider provider)
     {
@@ -91,18 +87,11 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = "SUP000002",
-                ["item"] = "ITM0002",
-                ["description"] = "Ball bearings for maintenance.",
-                ["quantity"] = 3m,
-                ["date"] = "2026-10-01",
-                ["requester"] = "Ana Souza",
-            }));
+        RequisitionFlow.ScriptConfirmedCreation(
+            chatClient.ScriptedToolCalls,
+            supplierCode: "SUP000002",
+            item: "ITM0002",
+            description: "Ball bearings for maintenance.");
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -123,18 +112,11 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
-            "call_create",
-            "create_requisition",
-            new Dictionary<string, object?>
-            {
-                ["supplierCode"] = "SUP000001",
-                ["item"] = "ITM0001",
-                ["description"] = "Hydraulic pump refill.",
-                ["quantity"] = 2m,
-                ["date"] = "2026-10-02",
-                ["requester"] = "Ana Souza",
-            }));
+        RequisitionFlow.ScriptConfirmedCreation(
+            chatClient.ScriptedToolCalls,
+            description: "Hydraulic pump refill.",
+            quantity: 2m,
+            date: "2026-10-02");
 
         await chat.AnswerAsync(new ChatRequest
         {

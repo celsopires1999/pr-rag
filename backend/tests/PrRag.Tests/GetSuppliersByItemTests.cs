@@ -3,6 +3,7 @@ using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
+using PrRag.Application.Services.Agents;
 using Xunit;
 
 namespace PrRag.Tests;
@@ -96,7 +97,7 @@ public class GetSuppliersByItemTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
             "call_get_suppliers",
-            "get_suppliers_by_item",
+            PurchaseRequisitionTools.GetSuppliersByItemTool,
             new Dictionary<string, object?>
             {
                 ["item"] = "ITM0001",
@@ -113,12 +114,53 @@ public class GetSuppliersByItemTests : IAsyncLifetime
         var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
         var json = JsonSerializer.Serialize(content.Result);
 
-        Assert.Contains("\"SUP000001\"", json);
-        Assert.Contains("\"Acme Industrial Supply\"", json);
-        Assert.Contains("\"SUP000002\"", json);
-        Assert.Contains("\"Beta Components Ltd\"", json);
-        Assert.Contains("\"SUP000003\"", json);
-        Assert.Contains("\"Gamma Tools\"", json);
+        // Counted object, camelCase keys — the model-facing result contract.
+        using var document = JsonDocument.Parse(json);
+        var result = document.RootElement;
+
+        Assert.Equal(3, result.GetProperty("count").GetInt32());
+
+        var suppliers = result.GetProperty("suppliers")
+            .EnumerateArray()
+            .ToDictionary(
+                s => s.GetProperty("supplierCode").GetString()!,
+                s => s.GetProperty("supplierName").GetString()!);
+
+        Assert.Equal("Acme Industrial Supply", suppliers["SUP000001"]);
+        Assert.Equal("Beta Components Ltd", suppliers["SUP000002"]);
+        Assert.Equal("Gamma Tools", suppliers["SUP000003"]);
+    }
+
+    [Fact]
+    public async Task Get_suppliers_by_item_tool_reports_zero_count_for_an_unknown_item()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+            "call_get_suppliers",
+            PurchaseRequisitionTools.GetSuppliersByItemTool,
+            new Dictionary<string, object?>
+            {
+                ["item"] = "ITM9999",
+            }));
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "Which suppliers provided the item ITM9999?",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
+        var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
+
+        using var document = JsonDocument.Parse(JsonSerializer.Serialize(content.Result));
+        var result = document.RootElement;
+
+        Assert.Equal(0, result.GetProperty("count").GetInt32());
+        Assert.Empty(result.GetProperty("suppliers").EnumerateArray());
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)

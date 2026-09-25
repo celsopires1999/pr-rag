@@ -67,14 +67,16 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
 
         var names = tools.All.Select(t => t.Name).ToHashSet();
 
-        Assert.Equal(5, tools.All.Count);
+        Assert.Equal(7, tools.All.Count);
         Assert.True(names.IsSupersetOf(new[]
         {
-            "search_by_codes",
-            "search_semantic",
-            "activate_skill",
-            "create_requisition",
-            "get_suppliers_by_item",
+            PurchaseRequisitionTools.SearchByCodesTool,
+            PurchaseRequisitionTools.SearchSemanticTool,
+            PurchaseRequisitionTools.ActivateSkillTool,
+            PurchaseRequisitionTools.GetSuppliersByItemTool,
+            PurchaseRequisitionTools.CreateRequisitionDraftTool,
+            PurchaseRequisitionTools.ConfirmRequisitionDraftTool,
+            PurchaseRequisitionTools.CreateRequisitionTool,
         }));
     }
 
@@ -102,5 +104,92 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
         var cleared = SkillSessionState.DescribeForReport(session);
         Assert.False(cleared.Active);
         Assert.Null(cleared.SkillName);
+    }
+
+    [Fact]
+    public async Task Requisition_draft_state_stages_presents_confirms_and_clears()
+    {
+        var session = await TestAgentSession.NewAsync();
+        var draft = new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza");
+
+        var empty = RequisitionDraftSessionState.Read(session);
+        Assert.Null(empty.Draft);
+        Assert.False(empty.Presented);
+        Assert.False(empty.Confirmed);
+        Assert.False(empty.HasConfirmedDraft);
+
+        RequisitionDraftSessionState.Stage(session, draft);
+
+        var staged = RequisitionDraftSessionState.Read(session);
+        Assert.Equal(draft, staged.Draft);
+        Assert.True(staged.Presented);
+        Assert.False(staged.Confirmed);
+        Assert.False(staged.HasConfirmedDraft);
+
+        Assert.True(RequisitionDraftSessionState.MarkConfirmed(session));
+
+        var confirmed = RequisitionDraftSessionState.Read(session);
+        Assert.True(confirmed.Confirmed);
+        Assert.True(confirmed.HasConfirmedDraft);
+        Assert.Equal(draft, confirmed.Draft);
+
+        RequisitionDraftSessionState.Clear(session);
+        var clearedDraft = RequisitionDraftSessionState.Read(session);
+        Assert.Null(clearedDraft.Draft);
+        Assert.False(clearedDraft.Presented);
+        Assert.False(clearedDraft.Confirmed);
+    }
+
+    [Fact]
+    public async Task Re_drafting_clears_the_previous_confirmation()
+    {
+        var session = await TestAgentSession.NewAsync();
+        var first = new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza");
+        var revised = first with { Quantity = 5m };
+
+        RequisitionDraftSessionState.Stage(session, first);
+        Assert.True(RequisitionDraftSessionState.MarkConfirmed(session));
+
+        // Editing a field after confirmation must require a fresh confirmation.
+        RequisitionDraftSessionState.Stage(session, revised);
+
+        var snapshot = RequisitionDraftSessionState.Read(session);
+        Assert.Equal(5m, snapshot.Draft!.Quantity);
+        Assert.True(snapshot.Presented);
+        Assert.False(snapshot.Confirmed);
+        Assert.False(snapshot.HasConfirmedDraft);
+    }
+
+    [Fact]
+    public async Task Confirming_without_a_staged_draft_is_refused()
+    {
+        var session = await TestAgentSession.NewAsync();
+
+        Assert.False(RequisitionDraftSessionState.MarkConfirmed(session));
+
+        var snapshot = RequisitionDraftSessionState.Read(session);
+        Assert.Null(snapshot.Draft);
+        Assert.False(snapshot.Confirmed);
+    }
+
+    [Fact]
+    public async Task Requisition_draft_state_reports_progress_flags()
+    {
+        var session = await TestAgentSession.NewAsync();
+
+        var empty = RequisitionDraftSessionState.Read(session);
+        Assert.Null(empty.Draft);
+        Assert.Equal((false, false, false), (empty.Draft is not null, empty.Presented, empty.Confirmed));
+
+        RequisitionDraftSessionState.Stage(
+            session,
+            new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza"));
+
+        var staged = RequisitionDraftSessionState.Read(session);
+        Assert.Equal((true, true, false), (staged.Draft is not null, staged.Presented, staged.Confirmed));
+
+        RequisitionDraftSessionState.MarkConfirmed(session);
+        var confirmed = RequisitionDraftSessionState.Read(session);
+        Assert.Equal((true, true, true), (confirmed.Draft is not null, confirmed.Presented, confirmed.Confirmed));
     }
 }
