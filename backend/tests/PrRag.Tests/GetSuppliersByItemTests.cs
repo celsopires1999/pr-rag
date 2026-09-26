@@ -95,7 +95,10 @@ public class GetSuppliersByItemTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+        // Routed per agent: the orchestrator can no longer reach the retrieval
+        // tools, so the turn is orchestrator -> handoff -> retrieval specialist.
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.GetSuppliersByItem, new FunctionCallContent(
             "call_get_suppliers",
             ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?>
@@ -110,7 +113,7 @@ public class GetSuppliersByItemTests : IAsyncLifetime
             MinSimilarity = 0,
         });
 
-        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
+        var toolMessage = chatClient.AllToolMessages.Last();
         var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
         var json = JsonSerializer.Serialize(content.Result);
 
@@ -138,7 +141,8 @@ public class GetSuppliersByItemTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.GetSuppliersByItem, new FunctionCallContent(
             "call_get_suppliers",
             ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?>
@@ -153,7 +157,7 @@ public class GetSuppliersByItemTests : IAsyncLifetime
             MinSimilarity = 0,
         });
 
-        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
+        var toolMessage = chatClient.AllToolMessages.Last();
         var content = toolMessage.Contents.OfType<FunctionResultContent>().Last();
 
         using var document = JsonDocument.Parse(JsonSerializer.Serialize(content.Result));

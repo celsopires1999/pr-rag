@@ -26,8 +26,42 @@ public sealed class FakeChatClient : IChatClient
     /// </summary>
     public List<FunctionCallContent> ScriptedToolCalls { get; } = new();
 
+    /// <summary>
+    /// Per-agent tool-call scripts, keyed by a tool name that only the agent in
+    /// question is offered.
+    ///
+    /// <para>
+    /// The single <see cref="ScriptedToolCalls"/> queue cannot express a handoff
+    /// graph: with capabilities extracted, the orchestrator and a specialist are
+    /// separate agents with disjoint tool sets, and a retrieval turn is three
+    /// calls across two agents — the orchestrator handing off, the specialist
+    /// running the search, the orchestrator answering. Keying on an offered tool
+    /// name routes each reply to the agent that owns it, because the two tool
+    /// sets do not overlap.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, List<FunctionCallContent>> ScriptedToolCallsByAgent { get; } =
+        new(StringComparer.Ordinal);
+
     private int _toolCallConsumed;
     private int _scriptedIndex;
+    private readonly Dictionary<string, int> _agentScriptIndex = new(StringComparer.Ordinal);
+    private readonly HashSet<string> _seenResultCallIds = new(StringComparer.Ordinal);
+
+    /// <summary>
+    /// MAF names the generated handoff tool positionally (<c>handoff_to_1</c>) and
+    /// offers no overload to name it, so a test cannot script a handoff by writing
+    /// that literal — adding a participant would renumber it. When this is set and
+    /// the calling agent is offered such a tool with its own script exhausted, the
+    /// fake hands off instead of answering, which is the default a real model
+    /// reaches for.
+    /// </summary>
+    public bool AutoHandoff { get; set; }
+
+    private const string HandoffToolPrefix = "handoff_to_";
+
+    /// <summary>The handoff tool the last call was offered, if any.</summary>
+    public string? LastHandoffToolName { get; private set; }
 
     /// <summary>
     /// Rewinds the script so a later turn of the same session can be scripted
@@ -39,9 +73,29 @@ public sealed class FakeChatClient : IChatClient
         lock (_lock)
         {
             ScriptedToolCalls.Clear();
+            ScriptedToolCallsByAgent.Clear();
             _scriptedIndex = 0;
             _toolCallConsumed = 0;
+            _agentScriptIndex.Clear();
         }
+    }
+
+    /// <summary>
+    /// Queues a tool call for whichever agent is offered <paramref name="agentKeyTool"/>.
+    /// Must be a tool name unique to that agent — the orchestrator is offered the
+    /// handoff tool plus the capabilities it still holds, and each specialist is
+    /// offered only its own.
+    /// </summary>
+    public FakeChatClient ScriptFor(string agentKeyTool, params FunctionCallContent[] calls)
+    {
+        if (!ScriptedToolCallsByAgent.TryGetValue(agentKeyTool, out var queue))
+        {
+            queue = [];
+            ScriptedToolCallsByAgent[agentKeyTool] = queue;
+        }
+
+        queue.AddRange(calls);
+        return this;
     }
 
     public string LastPrompt
@@ -60,15 +114,118 @@ public sealed class FakeChatClient : IChatClient
     }
 
     /// <summary>
+    /// Tool names the model was offered on the most recent call. Diagnostic:
+    /// with a handoff graph the offered set differs per agent, so this is how a
+    /// test can tell which agent the graph actually ran.
+    /// </summary>
+    public List<string> LastOfferedToolNames { get; } = new();
+
+    /// <summary>
+    /// Whether the response repeats the request, as MAF's does. Off by default:
+    /// most tests only care about the reply, and a few assert on the exact
+    /// contents of the last call's messages.
+    /// </summary>
+    public bool EchoRequest { get; set; }
+
+    /// <summary>The offered tool set of every call, in order, one entry per agent turn.</summary>
+    public List<List<string>> AllOfferedToolNames { get; } = new();
+
+    /// <summary>The instructions the model was given on every call, in order.</summary>
+    public List<string> AllPrompts { get; } = new();
+
+    /// <summary>
+    /// The instructions given to the agent that holds <paramref name="discriminatorTool"/>,
+    /// on its most recent call.
+    ///
+    /// <para>
+    /// <see cref="LastPrompt"/> is only "the prompt" while there is one agent. Once a
+    /// capability moves to a specialist, the last caller is whichever agent finished
+    /// the turn, so a test asserting on the orchestrator's instructions has to ask for
+    /// the orchestrator by something it holds rather than by position.
+    /// </para>
+    /// </summary>
+    public string PromptForAgent(string discriminatorTool)
+    {
+        for (var i = AllPrompts.Count - 1; i >= 0; i--)
+        {
+            if (i < AllOfferedToolNames.Count && AllOfferedToolNames[i].Contains(discriminatorTool))
+            {
+                return AllPrompts[i];
+            }
+        }
+
+        throw new InvalidOperationException(
+            $"No call was offered '{discriminatorTool}', so that agent never ran. " +
+            $"Offered per call: {string.Join(" / ", AllOfferedToolNames.Select(t => string.Join(",", t)))}");
+    }
+
+    /// <summary>
+    /// Every tool-role message seen across every call, oldest first.
+    ///
+    /// <para>
+    /// A handoff graph makes <see cref="LastMessages"/> the wrong place to look for
+    /// a tool result: the final call belongs to the orchestrator resuming after the
+    /// handoff, so the specialist's tool result is not in its message list. Tests
+    /// assert against this instead, which holds the results of all agents.
+    /// </para>
+    /// </summary>
+    public List<ChatMessage> AllToolMessages { get; } = new();
+
+    /// <summary>
     /// The most recent tool result the agent loop produced, normalized to JSON
     /// text so assertions do not depend on which concrete type the AI function
     /// layer's result marshalling happened to produce.
     /// </summary>
     public string LastToolResultJson()
     {
-        var toolMessage = LastMessages.Last(m => m.Role == ChatRole.Tool);
-        var result = toolMessage.Contents.OfType<FunctionResultContent>().Last().Result;
+        return ToolResultJson(AllToolMessages.Count - 1);
+    }
 
+    /// <summary>
+    /// Records the tool results the agent actually produced, keyed by call id.
+    ///
+    /// <para>
+    /// The application now owns the conversation, so a turn's request messages
+    /// contain every earlier turn — including that turn's tool results. Recording
+    /// whatever appears in a tool-role message would therefore report old calls
+    /// again, and "the last tool result" would stop meaning the last call. A call
+    /// id is recorded once, on the turn that made it.
+    /// </para>
+    /// </summary>
+    private void RecordFreshToolResults(IList<ChatMessage> messages)
+    {
+        foreach (var message in messages)
+        {
+            if (message.Role != ChatRole.Tool)
+            {
+                continue;
+            }
+
+            foreach (var result in message.Contents.OfType<FunctionResultContent>())
+            {
+                if (_seenResultCallIds.Add(result.CallId ?? string.Empty))
+                {
+                    AllToolMessages.Add(message);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The JSON result of the <paramref name="index"/>-th tool invocation across
+    /// all agents on this turn, so a specialist's result is reachable after the
+    /// orchestrator has resumed.
+    /// </summary>
+    public string ToolResultJson(int index)
+    {
+        var results = AllToolMessages
+            .SelectMany(m => m.Contents.OfType<FunctionResultContent>())
+            .ToList();
+        return Normalize(results[index].Result);
+    }
+
+    private static string Normalize(object? result)
+    {
         return result switch
         {
             string text => text,
@@ -91,10 +248,21 @@ public sealed class FakeChatClient : IChatClient
             _lastPrompt = prompt;
             _messages.Clear();
             _messages.AddRange(snapshot.Select(m => m));
+            LastOfferedToolNames.Clear();
+            LastOfferedToolNames.AddRange(options?.Tools?.Select(t => t.Name) ?? []);
+            AllOfferedToolNames.Add(LastOfferedToolNames.ToList());
+            AllPrompts.Add(LastPrompt);
+            RecordFreshToolResults(snapshot);
         }
 
         ChatMessage reply;
-        if (_scriptedIndex < ScriptedToolCalls.Count)
+        var offered = options?.Tools?.Select(t => t.Name).ToList() ?? [];
+
+        if (TryTakeAgentScript(offered, out var agentCall))
+        {
+            reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { agentCall });
+        }
+        else if (_scriptedIndex < ScriptedToolCalls.Count)
         {
             reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { ScriptedToolCalls[_scriptedIndex++] });
         }
@@ -107,7 +275,60 @@ public sealed class FakeChatClient : IChatClient
             reply = new ChatMessage(ChatRole.Assistant, Answer);
         }
 
-        return Task.FromResult(new ChatResponse { Messages = new List<ChatMessage> { reply } });
+        return Task.FromResult(new ChatResponse
+        {
+            // MAF's agent response carries the whole turn, not just the new
+            // message: the request it was given plus the reply. <see
+            // cref="EchoRequest"/> reproduces that, because a fake returning only
+            // the reply would hide any code that records the response back into
+            // the conversation — which is how the history once doubled.
+            Messages = EchoRequest ? [.. snapshot, reply] : [reply],
+        });
+    }
+
+    /// <summary>
+    /// Returns the next scripted call for the agent that was called, identified by
+    /// which discriminator tool it was offered. An agent whose queue is exhausted
+    /// falls through to the default answer, which is how the orchestrator ends a
+    /// handoff turn with the specialist's results already in hand.
+    /// </summary>
+    private bool TryTakeAgentScript(List<string> offeredTools, out FunctionCallContent call)
+    {
+        call = null!;
+        var offered = offeredTools.ToHashSet(StringComparer.Ordinal);
+
+        foreach (var (key, queue) in ScriptedToolCallsByAgent)
+        {
+            if (!offered.Contains(key))
+            {
+                continue;
+            }
+
+            var index = _agentScriptIndex.GetValueOrDefault(key);
+            if (index >= queue.Count)
+            {
+                continue;
+            }
+
+            _agentScriptIndex[key] = index + 1;
+            call = queue[index];
+            return true;
+        }
+
+        // The calling agent has nothing left scripted, so if it is offered a
+        // handoff tool and auto-handoff is on, transfer rather than answer.
+        if (AutoHandoff)
+        {
+            var handoff = offeredTools.FirstOrDefault(n => n.StartsWith(HandoffToolPrefix, StringComparison.Ordinal));
+            if (handoff is not null)
+            {
+                LastHandoffToolName = handoff;
+                call = new FunctionCallContent($"handoff_{Guid.NewGuid():N}", handoff, new Dictionary<string, object?>());
+                return true;
+            }
+        }
+
+        return false;
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

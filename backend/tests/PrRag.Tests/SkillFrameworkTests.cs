@@ -7,6 +7,7 @@ using PrRag.Application.Domain;
 using PrRag.Application.DTOs;
 using PrRag.Infrastructure.Persistence;
 using Xunit;
+using PrRag.Application.Services.Agents;
 
 namespace PrRag.Tests;
 
@@ -30,8 +31,8 @@ public class SkillFrameworkTests : IAsyncLifetime
         When this skill is active you act as a purchasing assistant that helps the user draft and persist a NEW purchase requisition.
         # Procedure
         1. Collect the required fields one at a time: supplier code, item code, description, quantity, delivery date (yyyy-MM-dd), requester.
-        2. Validate item (ITM-*) and supplier (SUP*) codes with search_by_codes and flag any code with no match.
-        3. Also call search_by_codes with the item and supplier together to confirm at least one requisition has that exact item + supplier combination before finalizing the draft.
+        2. You cannot verify codes yourself: the lookup tools belong to another agent. Never tell the user a code has been verified.
+        3. create_requisition performs the authoritative check and refuses an item and supplier combination that has no existing requisition, writing nothing when it does.
         4. Present a structured draft and ask for explicit confirmation.
         5. After the user confirms, call create_requisition with exactly the six validated fields and report the created requisition id.
         """;
@@ -124,25 +125,51 @@ public class SkillFrameworkTests : IAsyncLifetime
         new("call_codes", "search_by_codes", new Dictionary<string, object?> { ["suppliers"] = suppliers.ToArray() });
 
     [Fact]
-    public async Task Skill_guidance_is_followed_with_code_validation_via_search_tool()
+    public async Task An_active_skill_survives_a_turn_that_is_routed_to_a_participant()
     {
         using var scope = _provider!.CreateScope();
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
-        chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
+        // Turn 1: the orchestrator activates the skill. The manifest is the
+        // orchestrator's, so ask for the prompt by the tool that proves who held it.
+        chatClient.AutoHandoff = false;
+        chatClient.ScriptFor(ToolNames.ActivateSkill, ActivationCall("create-purchase-requisition"));
 
-        var response = await chat.AnswerAsync(new ChatRequest
+        await chat.AnswerAsync(new ChatRequest
         {
             Question = "create a purchase requisition for supplier SUP000001",
             TopK = 5,
             MinSimilarity = 0,
+            SessionId = "skill-then-handoff",
+        });
+
+        Assert.Contains("create-purchase-requisition", chatClient.PromptForAgent(ToolNames.ActivateSkill));
+
+        // Turn 2: a lookup question, so the turn is handed to the retrieval
+        // specialist. The skill is still active, and its guidance reaches the
+        // participant as a run-level system message even though the participant's
+        // own instructions carry no manifest — only the orchestrator holds
+        // activate_skill, so only the orchestrator can be told what exists.
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.SearchByCodes, CodesCall(new[] { "SUP000001" }));
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "what requisitions exist for supplier SUP000001?",
+            TopK = 5,
+            MinSimilarity = 0,
+            SessionId = "skill-then-handoff",
         });
 
         Assert.Equal(1, response.RetrievedCount);
         Assert.NotEmpty(response.Answer);
-        Assert.Contains("create-purchase-requisition", chatClient.LastPrompt);
+
+        // The participant saw the active skill's guidance.
+        Assert.Contains(
+            chatClient.LastMessages,
+            m => m.Role == ChatRole.System
+                 && m.Text.Contains("purchasing assistant", StringComparison.Ordinal));
     }
 
     [Fact]

@@ -4,6 +4,7 @@ using PrRag.Application;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
 using PrRag.Application.Configuration;
+using PrRag.Application.Domain;
 using PrRag.Infrastructure;
 using PrRag.Infrastructure.Persistence;
 
@@ -57,8 +58,23 @@ app.MapPost("/api/chat", async (
         return Results.BadRequest(new { error = "question is required." });
     }
 
-    var response = await chatService.AnswerAsync(request, ct);
-    return Results.Ok(response);
+    try
+    {
+        var response = await chatService.AnswerAsync(request, ct);
+        return Results.Ok(response);
+    }
+    catch (ChatTurnFailedException ex)
+    {
+        // 502, not 500: the turn failed because the model provider did, and the
+        // distinction matters to a caller deciding whether to retry. Answering
+        // 200 with a blank body instead made an outage indistinguishable from a
+        // quiet turn.
+        app.Logger.LogError(ex, "Chat turn failed: the agent run produced no answer");
+        return Results.Problem(
+            title: "The assistant produced no answer.",
+            detail: ex.Message,
+            statusCode: StatusCodes.Status502BadGateway);
+    }
 });
 
 app.MapPost("/api/chat/stream", async (
@@ -87,12 +103,23 @@ app.MapPost("/api/chat/stream", async (
             await httpContext.Response.Body.FlushAsync(ct);
         }
 
+        // Reached only when the run produced text. StreamAsync throws otherwise,
+        // so [DONE] can never follow an empty body: a client that saw the
+        // terminator after no content would render a completed, empty answer
+        // rather than a failure. The status line is already sent by this point,
+        // so the failure reaches the client as a truncated stream, which is the
+        // honest signal available here.
         await httpContext.Response.WriteAsync("data: [DONE]\n\n", ct);
         await httpContext.Response.Body.FlushAsync(ct);
     }
     catch (OperationCanceledException) when (ct.IsCancellationRequested)
     {
         // Client aborted the stream; nothing more to write.
+    }
+    catch (ChatTurnFailedException ex)
+    {
+        app.Logger.LogError(ex, "Chat stream failed: the agent run produced no answer");
+        httpContext.Abort();
     }
 
     return Results.Empty;

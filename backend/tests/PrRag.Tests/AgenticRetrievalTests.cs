@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
 using Xunit;
+using PrRag.Application.Services.Agents;
 
 namespace PrRag.Tests;
 
@@ -73,10 +74,11 @@ public class AgenticRetrievalTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ToolCall = new FunctionCallContent(
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.SearchByCodes, new FunctionCallContent(
             "call_1",
-            "search_by_codes",
-            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } }));
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -97,10 +99,11 @@ public class AgenticRetrievalTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ToolCall = new FunctionCallContent(
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.SearchSemantic, new FunctionCallContent(
             "call_1",
-            "search_semantic",
-            new Dictionary<string, object?> { ["query"] = "hydraulic pump" });
+            ToolNames.SearchSemantic,
+            new Dictionary<string, object?> { ["query"] = "hydraulic pump" }));
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -133,6 +136,58 @@ public class AgenticRetrievalTests : IAsyncLifetime
         Assert.Equal(1, chatClient.CallCount);
     }
 
+    /// <summary>
+    /// The answer is the run's answer, not the transcript that produced it.
+    ///
+    /// <para>
+    /// A multi-turn run reports the request back as outputs, the earlier
+    /// question and answer included, and folding those together is what made a
+    /// reply arrive as its own history replayed ahead of it. This fails if the
+    /// run's messages are concatenated back into the answer again, which is the
+    /// only place that could reintroduce it.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task Answer_is_the_new_reply_and_not_the_replayed_transcript()
+    {
+        var sessionId = Guid.NewGuid().ToString("N");
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.SearchByCodes, new FunctionCallContent(
+            "call_1",
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000002" } }));
+
+        var first = await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "give me details on SUP000002",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+        Assert.Equal("fake answer", first.Answer);
+
+        using var next = _provider.CreateScope();
+        var nextChat = next.ServiceProvider.GetRequiredService<IChatService>();
+        var nextClient = next.ServiceProvider.GetRequiredService<FakeChatClient>();
+        nextClient.AutoHandoff = true;
+
+        var second = await nextChat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "tell me more about that supplier",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        // The earlier turn must not reappear in the answer.
+        Assert.Equal("fake answer", second.Answer);
+        Assert.DoesNotContain("give me details on SUP000002", second.Answer);
+    }
+
     [Fact]
     public async Task Full_history_carried_across_turns()
     {
@@ -141,10 +196,11 @@ public class AgenticRetrievalTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ToolCall = new FunctionCallContent(
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.SearchByCodes, new FunctionCallContent(
             "call_1",
-            "search_by_codes",
-            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000002" } });
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000002" } }));
 
         var first = await chat.AnswerAsync(new ChatRequest
         {
@@ -171,10 +227,64 @@ public class AgenticRetrievalTests : IAsyncLifetime
 
         Assert.NotEmpty(streamed);
 
+        // The conversation is carried as text turns, never as tool traffic: no
+        // half of a call/result pair is replayable. See ChatService.RecordTurn.
         var messages = chatClient.LastMessages;
-        Assert.Contains(messages, m => m.Role == ChatRole.Tool);
+        Assert.DoesNotContain(messages, m => m.Contents.Any(c => c is FunctionCallContent or FunctionResultContent));
         Assert.Contains(messages, m => m.Text == "give me details on SUP000002");
+        Assert.Contains(messages, m => m.Text == "fake answer");
         Assert.Contains(messages, m => m.Text == "tell me more about that supplier");
+    }
+
+    /// <summary>
+    /// MAF's agent response carries the request it was given as well as the
+    /// reply, so recording the response back into the conversation re-records the
+    /// question — and on a later turn, every earlier turn. The history then grows
+    /// geometrically and the model answers a follow-up by repeating itself.
+    /// </summary>
+    [Fact]
+    public async Task Recording_a_turn_does_not_re_record_the_earlier_ones()
+    {
+        var sessionId = Guid.NewGuid().ToString("N");
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+        chatClient.EchoRequest = true;
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "first question",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "second question",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "third question",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var state = scope.ServiceProvider
+            .GetRequiredService<IAgentSessionStore>()
+            .GetOrCreate(sessionId);
+
+        var questions = state.History
+            .Where(m => m.Role == ChatRole.User)
+            .Select(m => m.Text)
+            .ToList();
+
+        Assert.Equal(["first question", "second question", "third question"], questions);
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)

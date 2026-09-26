@@ -1,20 +1,19 @@
 using System.Text.Json;
-using Microsoft.Agents.AI;
 using PrRag.Application.Domain;
 
 namespace PrRag.Application.Services.Agents;
 
 /// <summary>
-/// Owns the requisition-draft keys and logic of the <see cref="AgentSession"/>
-/// state bag: staging a draft, marking it presented, recording the user's
-/// confirmation, and clearing once a requisition is persisted. Mirrors
+/// Owns the requisition-draft state of a <see cref="AgentSessionState"/>:
+/// staging a draft, marking it presented, recording the user's confirmation, and
+/// clearing once a requisition is persisted. Mirrors
 /// <see cref="SkillSessionState"/> — the draft is deliberately session-scoped,
 /// not a database row, because an unconfirmed proposal is worthless once the
 /// conversation ends.
 ///
 /// The draft is stored as a JSON string for the same reason the skill body is
-/// stored as a plain string: the state bag's persistence is not something the
-/// tool handlers should depend on knowing the CLR type of.
+/// stored as a plain string: the tool handlers should not depend on knowing the
+/// CLR type the state happens to be held as.
 ///
 /// Staging marks the draft presented in one step, because
 /// <c>create_requisition_draft</c> returns the values specifically so the model
@@ -26,36 +25,22 @@ namespace PrRag.Application.Services.Agents;
 /// </summary>
 public static class RequisitionDraftSessionState
 {
-    private const string DraftKey = "RequisitionDraft";
-    private const string DraftPresentedKey = "RequisitionDraftPresented";
-    private const string DraftConfirmedKey = "RequisitionDraftConfirmed";
-
-    private const string True = "true";
-
     /// <summary>
     /// Stores a draft and marks it presented. Any prior draft is replaced and
     /// the confirmed flag is cleared, so a re-draft always requires a fresh
     /// presentation and confirmation.
     /// </summary>
-    public static void Stage(AgentSession session, RequisitionDraft draft)
+    public static void Stage(AgentSessionState state, RequisitionDraft draft)
     {
-        session.StateBag.SetValue(DraftKey, JsonSerializer.Serialize(draft));
-        session.StateBag.SetValue(DraftPresentedKey, True);
-        session.StateBag.TryRemoveValue(DraftConfirmedKey);
+        state.RequisitionDraftJson = JsonSerializer.Serialize(draft);
+        state.RequisitionDraftPresented = true;
+        state.RequisitionDraftConfirmed = false;
     }
 
     /// <summary>Returns the session's draft and its progress flags.</summary>
-    public static RequisitionDraftSnapshot Read(AgentSession? session)
+    public static RequisitionDraftSnapshot Read(AgentSessionState? state)
     {
-        if (session is null)
-        {
-            return default;
-        }
-
-        var presented = ReadFlag(session, DraftPresentedKey);
-        var confirmed = ReadFlag(session, DraftConfirmedKey);
-
-        if (!session.StateBag.TryGetValue<string>(DraftKey, out var json) || string.IsNullOrWhiteSpace(json))
+        if (state is null || string.IsNullOrWhiteSpace(state.RequisitionDraftJson))
         {
             return default;
         }
@@ -63,7 +48,7 @@ public static class RequisitionDraftSessionState
         RequisitionDraft? draft;
         try
         {
-            draft = JsonSerializer.Deserialize<RequisitionDraft>(json);
+            draft = JsonSerializer.Deserialize<RequisitionDraft>(state.RequisitionDraftJson);
         }
         catch (JsonException)
         {
@@ -77,33 +62,30 @@ public static class RequisitionDraftSessionState
             return default;
         }
 
-        return new RequisitionDraftSnapshot(draft, presented, confirmed);
+        return new RequisitionDraftSnapshot(draft, state.RequisitionDraftPresented, state.RequisitionDraftConfirmed);
     }
 
     /// <summary>
     /// Marks a presented draft as confirmed. Returns false when there is no
     /// draft or it has not been presented, leaving the state unchanged.
     /// </summary>
-    public static bool MarkConfirmed(AgentSession session)
+    public static bool MarkConfirmed(AgentSessionState state)
     {
-        var current = Read(session);
+        var current = Read(state);
         if (current.Draft is null || !current.Presented)
         {
             return false;
         }
 
-        session.StateBag.SetValue(DraftConfirmedKey, True);
+        state.RequisitionDraftConfirmed = true;
         return true;
     }
 
-    /// <summary>Drops all requisition-draft state from the session state bag.</summary>
-    public static void Clear(AgentSession session)
+    /// <summary>Drops all requisition-draft state.</summary>
+    public static void Clear(AgentSessionState state)
     {
-        session.StateBag.TryRemoveValue(DraftKey);
-        session.StateBag.TryRemoveValue(DraftPresentedKey);
-        session.StateBag.TryRemoveValue(DraftConfirmedKey);
+        state.RequisitionDraftJson = null;
+        state.RequisitionDraftPresented = false;
+        state.RequisitionDraftConfirmed = false;
     }
-
-    private static bool ReadFlag(AgentSession session, string key) =>
-        session.StateBag.TryGetValue<string>(key, out var value) && value == True;
 }

@@ -53,6 +53,25 @@ public sealed class RagQueryReport
     public int RetrievedCount { get; set; }
 
     public bool UsedNoContextFallback { get; set; }
+
+    /// <summary>
+    /// Whether a read-only tool actually ran this turn.
+    /// </summary>
+    /// <remarks>
+    /// This exists because <see cref="UsedNoContextFallback"/> cannot answer the
+    /// question an operator asks when a turn returns nothing: "did we search and
+    /// find nothing, or did the model never search?" Both are
+    /// <c>RetrievedCount == 0</c> and both set the fallback flag, so the two cases
+    /// were indistinguishable in the report.
+    /// <para>
+    /// The live gate hit exactly the second case. A turn narrated "Observation:
+    /// Executed the search" and returned nothing, with no tool call in the report
+    /// — the model claimed a search that never ran. With this field the claim is
+    /// at least checkable: <c>RetrievalAttempted == false</c> alongside an answer
+    /// that describes results is a fabricated retrieval.
+    /// </para>
+    /// </remarks>
+    public bool RetrievalAttempted { get; set; }
 }
 
 public sealed class RagRetrievedItem

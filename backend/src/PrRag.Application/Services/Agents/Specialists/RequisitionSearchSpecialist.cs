@@ -26,9 +26,9 @@ public sealed class RequisitionSearchSpecialist
     /// </summary>
     public const string ActionBlock =
         """
-        * **`search_by_codes`**: Use when the user provides exact ITM-* item codes or SUP* supplier codes. Returns basic requisition details (e.g., descriptions). *Note: Does NOT return quantity or date information.*
-        * **`search_semantic`**: Use when the user asks about requisitions by meaning, general description, or keywords. Before calling, rewrite the user's question into a short, keyword-rich English query optimized for cosine similarity search. Resolve conversational references (e.g., "that one", "as seen earlier") using conversation history.
-        * **`get_suppliers_by_item`**: Use when the user asks which suppliers provided, supplied, or sell a specific item (e.g., "What are the suppliers that provided the item ITM-00000000000000000008?"). Extract the item code (ITM-*) from the question and call it. If the user gives only the item name, resolve it to the code first via `search_semantic`. Returns the distinct SupplierCode + SupplierName list — echo it without inventing entries.
+        * **`search_by_codes`**: Use when the user provides exact ITM-* item codes or SUP* supplier codes. Returns basic requisition details (e.g., descriptions). *Note: Does NOT return quantity or date information.* A follow-up that names a supplier ("and what about supplier SUP000002?") is still this tool, with the code in `suppliers`.
+        * **`search_semantic`**: Use when the user asks about requisitions by meaning, general description, or keywords. Rewrite the user's question internally into a short, keyword-rich English query optimized for cosine similarity search, and pass that as `query` in the same turn. The rewrite is preparation you keep to yourself, not text you show. Resolve conversational references (e.g., "that one", "as seen earlier") using conversation history.
+        * **`get_suppliers_by_item`**: Use when the user asks which suppliers provided, supplied, or sell a specific item (e.g., "What are the suppliers that provided the item ITM-00000000000000000008?"). Extract the item code (ITM-*) from the question and call it. If the user gives only the item name, resolve it to the code first via `search_semantic`. Returns the distinct SupplierCode + SupplierName list — echo it without inventing entries. The relation runs item → suppliers, so this tool is only for a question whose subject is an item. A SUP* code is never an `item`: when the question names a supplier, use `search_by_codes` with `suppliers` instead, which answers supplier → requisitions.
         """;
 
     private readonly IEmbeddingService _embeddingService;
@@ -52,7 +52,12 @@ public sealed class RequisitionSearchSpecialist
         _ownedTools.Add(tools.Add(ToolNames.SearchSemantic, SearchSemanticAsync));
         _ownedTools.Add(tools.Add(ToolNames.GetSuppliersByItem, GetSuppliersByItemAsync));
 
-        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools);
+        // Read-only, so it is the first capability extracted to its own agent.
+        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools)
+        {
+            ReservedAgentSlug = AgentIds.Retrieval,
+            AgentSlug = AgentIds.Retrieval,
+        };
     }
 
     /// <summary>This unit's prose and tools, as one value.</summary>
@@ -63,7 +68,7 @@ public sealed class RequisitionSearchSpecialist
         "Returns matching requisitions with their supplier and item details.")]
     private async Task<ToolSearchResult> SearchByCodesAsync(
         [Description("The item codes to search for")] IReadOnlyList<string>? items = null,
-        [Description("The supplier codes to search for")] IReadOnlyList<string>? suppliers = null,
+        [Description("The supplier codes (SUP*) to search for. Item codes (ITM-*) go in 'items' instead, and a supplier code is never an item code.")] IReadOnlyList<string>? suppliers = null,
         CancellationToken cancellationToken = default)
     {
         var startedAt = Stopwatch.GetTimestamp();
@@ -111,7 +116,7 @@ public sealed class RequisitionSearchSpecialist
         "(ITM-*) extracted from the question; resolve an item name to its code first via search_by_codes when needed. " +
         "Each supplier appears exactly once.")]
     private async Task<ToolSupplierList> GetSuppliersByItemAsync(
-        [Description("The item code (ITM-*) to look up suppliers for")] string item,
+        [Description("The item code (ITM-*) to look up suppliers for. Never a supplier code (SUP*) — a supplier code belongs in search_by_codes.suppliers.")] string item,
         CancellationToken cancellationToken = default)
     {
         var startedAt = Stopwatch.GetTimestamp();

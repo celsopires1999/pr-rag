@@ -18,6 +18,10 @@ public static class DependencyInjection
         services.AddScoped<RequisitionCreationSpecialist>();
         services.AddScoped<SkillActivationSpecialist>();
         services.AddScoped<ISpecialistCatalog, SpecialistCatalog>();
+        // Scoped for the same reason the specialists are: the composer captures
+        // the request-scoped AgentTurnContext through the tool handlers it binds,
+        // so the graph must be rebuilt per request rather than shared.
+        services.AddScoped<AgentGraphComposer>();
         services.AddScoped<IAgentRunService, AgentRunService>();
         services.AddScoped<IChatService, ChatService>();
         services.AddScoped<IIngestionService, IngestionService>();

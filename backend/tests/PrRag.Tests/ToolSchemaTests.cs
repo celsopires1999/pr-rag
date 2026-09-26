@@ -124,7 +124,9 @@ public class ToolSchemaTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
+        // Routed per agent: the orchestrator no longer holds the retrieval tools.
+        chatClient.AutoHandoff = true;
+        chatClient.ScriptFor(ToolNames.GetSuppliersByItem, new FunctionCallContent(
             "call_suppliers",
             ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?> { ["item"] = "ITM0001" }));
@@ -136,7 +138,7 @@ public class ToolSchemaTests : IAsyncLifetime
             MinSimilarity = 0,
         });
 
-        var toolMessage = chatClient.LastMessages.Last(m => m.Role == ChatRole.Tool);
+        var toolMessage = chatClient.AllToolMessages.Last();
         Assert.Contains(toolMessage.Contents, c => c is FunctionResultContent);
 
         // Whatever concrete type marshalling produces, the model must receive
@@ -171,6 +173,31 @@ public class ToolSchemaTests : IAsyncLifetime
                     $"Tool '{name}' parameter '{property.Name}' has no description in its schema.");
             }
         }
+    }
+
+    /// <summary>
+    /// The two code-lookup tools must each name the code family they reject.
+    ///
+    /// <para>
+    /// Found by the live gate: on a supplier follow-up ("and what about supplier
+    /// SUP000002?") the model reached for <c>get_suppliers_by_item</c> and passed
+    /// the supplier code as <c>item</c>, in 6 runs out of 7. Nothing in the schema
+    /// said a SUP* code was not an <c>item</c>, and nothing said which tool
+    /// answers supplier → requisitions. These descriptions are the model's only
+    /// view of that, so the disambiguation is asserted rather than trusted.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Code_lookup_tools_each_reject_the_other_code_family()
+    {
+        var itemParameter = SchemaOf(FunctionNamed(ToolNames.GetSuppliersByItem))
+            .GetProperty("properties").GetProperty("item").GetProperty("description").GetString();
+
+        var suppliersParameter = SchemaOf(FunctionNamed(ToolNames.SearchByCodes))
+            .GetProperty("properties").GetProperty("suppliers").GetProperty("description").GetString();
+
+        Assert.Contains("SUP*", itemParameter, StringComparison.Ordinal);
+        Assert.Contains("ITM-*", suppliersParameter, StringComparison.Ordinal);
     }
 
     /// <summary>

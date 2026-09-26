@@ -41,6 +41,11 @@ public sealed class RequisitionCreationSpecialist
 
         Never call `create_requisition` directly, and never treat the user's listing of the fields as their
         confirmation of the draft. A field list is not consent: the user must respond to the draft you presented.
+
+        You do not own the lookup tools: `search_by_codes` and `search_semantic` are the retrieval specialist's.
+        If the user asks you to look a code up or to check whether an item and supplier go together, hand that
+        question off rather than answering it. Never assert a code is valid, and never let a lookup stand in for
+        the confirmation gate: `create_requisition` runs its own check and refuses an unregistered combination.
         """;
 
     private static readonly string[] CreateRequisitionArguments =
@@ -67,7 +72,13 @@ public sealed class RequisitionCreationSpecialist
         _ownedTools.Add(tools.Add(ToolNames.ConfirmRequisitionDraft, ConfirmRequisitionDraftAsync));
         _ownedTools.Add(tools.Add(ToolNames.CreateRequisition, CreateRequisitionAsync));
 
-        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools);
+        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools)
+        {
+            // Reserved but not bound: the write path is the one capability whose
+            // extraction is not a copy of the retrieval one, because its gate
+            // spans turns. See the write-path-isolation change.
+            ReservedAgentSlug = AgentIds.Creation,
+        };
     }
 
     /// <summary>This unit's prose and tools, as one value.</summary>
@@ -110,7 +121,7 @@ public sealed class RequisitionCreationSpecialist
             return Task.FromResult(ToolDraftStaged.Rejected(validationError));
         }
 
-        RequisitionDraftSessionState.Stage(_turnContext.Session!, draft);
+        RequisitionDraftSessionState.Stage(_turnContext.State!, draft);
         _turnContext.DraftStaged = true;
         _turnContext.DraftPresented = true;
 
@@ -135,8 +146,8 @@ public sealed class RequisitionCreationSpecialist
             ["answer"] = answer,
         });
 
-        var session = _turnContext.Session!;
-        var snapshot = RequisitionDraftSessionState.Read(session);
+        var state = _turnContext.State!;
+        var snapshot = RequisitionDraftSessionState.Read(state);
 
         if (snapshot.Draft is null)
         {
@@ -162,14 +173,14 @@ public sealed class RequisitionCreationSpecialist
                 "ask the user what to change, or whether they want to proceed."));
         }
 
-        if (!RequisitionDraftSessionState.MarkConfirmed(session))
+        if (!RequisitionDraftSessionState.MarkConfirmed(state))
         {
             _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 0);
             return Task.FromResult(ToolDraftConfirmation.Declined(
                 "The draft could not be confirmed. Present the draft again and ask the user to confirm."));
         }
 
-        var confirmed = RequisitionDraftSessionState.Read(session).Draft!;
+        var confirmed = RequisitionDraftSessionState.Read(state).Draft!;
         _turnContext.DraftConfirmed = true;
         _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 1);
         return Task.FromResult(ToolDraftConfirmation.Recorded(
@@ -204,8 +215,8 @@ public sealed class RequisitionCreationSpecialist
             ["requester"] = requester,
         });
 
-        var session = _turnContext.Session!;
-        var snapshot = RequisitionDraftSessionState.Read(session);
+        var state = _turnContext.State!;
+        var snapshot = RequisitionDraftSessionState.Read(state);
 
         // Gate: no confirmed draft, no requisition. This is enforced here rather
         // than left to the model because the confirmation procedure is advisory
@@ -272,8 +283,8 @@ public sealed class RequisitionCreationSpecialist
 
         if (result.Success)
         {
-            SkillSessionState.Clear(session);
-            RequisitionDraftSessionState.Clear(session);
+            SkillSessionState.Clear(state);
+            RequisitionDraftSessionState.Clear(state);
             _turnContext.RequisitionPersisted = true;
             return ToolRequisitionWrite.Created(result.RequisitionId!);
         }

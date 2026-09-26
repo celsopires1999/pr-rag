@@ -1,74 +1,58 @@
-using Microsoft.Agents.AI;
-
 namespace PrRag.Application.Services.Agents;
 
 /// <summary>
-/// Owns the skill-related keys and logic of the <see cref="AgentSession"/> state
-/// bag: activation, per-turn guidance injection, clearing once a workflow
-/// completes, and reporting. Keeps the state-bag keys out of the chat
-/// orchestrator and the tools.
+/// Owns the skill-related state of a <see cref="AgentSessionState"/>: activation,
+/// per-turn guidance injection, clearing once a workflow completes, and
+/// reporting. Keeps the state keys out of the chat orchestrator and the tools.
+///
+/// <para>
+/// The guidance body is injected as a message on the turn *after* activation,
+/// because the model must first call <c>activate_skill</c> and see what it
+/// returned; re-injecting it on later turns would restate it forever.
+/// </para>
 /// </summary>
 public static class SkillSessionState
 {
-    private const string SkillIdKey = "SkillId";
-    private const string SkillBodyKey = "SkillBody";
-    private const string SkillBodyInjectedKey = "SkillBodyInjected";
-
-    /// <summary>Records an activated skill in the session state bag.</summary>
-    public static void Activate(AgentSession session, string name, string body)
+    /// <summary>Records an activated skill, arming its guidance for the next turn.</summary>
+    public static void Activate(AgentSessionState state, string name, string body)
     {
-        session.StateBag.SetValue(SkillIdKey, name);
-        session.StateBag.SetValue(SkillBodyKey, body);
-        session.StateBag.TryRemoveValue(SkillBodyInjectedKey);
+        state.SkillId = name;
+        state.SkillBody = body;
+        state.SkillBodyInjected = false;
     }
 
     /// <summary>
     /// Returns the guidance body of the active skill when it has not yet been
-    /// injected on this session, otherwise null.
+    /// injected, otherwise null.
     /// </summary>
-    public static string? ReadActiveSkillBody(AgentSession session)
+    public static string? ReadActiveSkillBody(AgentSessionState state)
     {
-        if (!session.StateBag.TryGetValue<string>(SkillIdKey, out var skillId)
-            || string.IsNullOrWhiteSpace(skillId))
+        if (string.IsNullOrWhiteSpace(state.SkillId) || state.SkillBodyInjected)
         {
             return null;
         }
 
-        // Guidance already injected in an earlier turn of this session.
-        if (session.StateBag.TryGetValue<string>(SkillBodyInjectedKey, out var injected) && injected == "true")
-        {
-            return null;
-        }
-
-        return session.StateBag.TryGetValue<string>(SkillBodyKey, out var body) ? body : null;
+        return state.SkillBody;
     }
 
-    /// <summary>Marks the active skill guidance as injected for this session.</summary>
-    public static void MarkInjected(AgentSession session)
+    /// <summary>Marks the active skill guidance as injected.</summary>
+    public static void MarkInjected(AgentSessionState state) => state.SkillBodyInjected = true;
+
+    /// <summary>Drops all skill state.</summary>
+    public static void Clear(AgentSessionState state)
     {
-        session.StateBag.SetValue(SkillBodyInjectedKey, "true");
+        state.SkillId = null;
+        state.SkillBody = null;
+        state.SkillBodyInjected = false;
     }
 
-    /// <summary>Drops all skill state from the session state bag.</summary>
-    public static void Clear(AgentSession session)
+    public static (string? SkillName, bool Active) DescribeForReport(AgentSessionState? state)
     {
-        session.StateBag.TryRemoveValue(SkillIdKey);
-        session.StateBag.TryRemoveValue(SkillBodyKey);
-        session.StateBag.TryRemoveValue(SkillBodyInjectedKey);
-    }
-
-    public static (string? SkillName, bool Active) DescribeForReport(AgentSession? session)
-    {
-        if (session is null)
+        if (state is null || string.IsNullOrWhiteSpace(state.SkillId))
         {
             return (null, false);
         }
 
-        if (!session.StateBag.TryGetValue<string>(SkillIdKey, out var skillId) || string.IsNullOrWhiteSpace(skillId))
-        {
-            return (null, false);
-        }
-
-        return (skillId, true);
+        return (state.SkillId, true);
     }
 }

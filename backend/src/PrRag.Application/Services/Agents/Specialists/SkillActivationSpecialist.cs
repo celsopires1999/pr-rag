@@ -45,7 +45,14 @@ public sealed class SkillActivationSpecialist
 
         _ownedTools.Add(tools.Add(ToolNames.ActivateSkill, ActivateSkillAsync));
 
-        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools);
+        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools)
+        {
+            // Reserved but not bound. Extraction is not a copy of the retrieval
+            // one here either: only the orchestrator is given the skill manifest,
+            // so it is the only agent that can be told what skills exist, which
+            // makes "who activates" and "who may be told" the same question.
+            ReservedAgentSlug = AgentIds.SkillActivation,
+        };
     }
 
     /// <summary>This unit's prose and tools, as one value.</summary>
@@ -75,7 +82,7 @@ public sealed class SkillActivationSpecialist
             return ToolSkillActivation.NotFound(name, message);
         }
 
-        SkillSessionState.Activate(_turnContext.Session!, skill.Name, skill.Body);
+        SkillSessionState.Activate(_turnContext.State!, skill.Name, skill.Body);
         _tools.Log(ToolNames.ActivateSkill, ["name"], startedAt, 1);
         return ToolSkillActivation.Activated(skill.Name, skill.Body);
     }

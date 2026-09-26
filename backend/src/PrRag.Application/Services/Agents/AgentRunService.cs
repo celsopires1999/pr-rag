@@ -6,54 +6,42 @@ using PrRag.Application.Services.Agents.Specialists;
 namespace PrRag.Application.Services.Agents;
 
 /// <summary>
-/// Composes the <c>ChatClientAgent</c> from the registered <c>IChatClient</c>,
-/// the <see cref="AgentInstructions"/> identity, the <see cref="ISpecialistCatalog"/>
-/// tool list, and the current skill manifest, then executes runs. Mirror of the
-/// AgentLab pattern: composition (agent + instructions + tools) is kept apart
-/// from per-turn orchestration.
+/// Runs the composed agent behind a narrow abstraction so the chat orchestrator
+/// never constructs or runs an agent itself.
 ///
-/// The prompt is compiled here, on the agent's <c>instructions</c>, rather than
-/// being handed in as a message by the caller. Two reasons: the agent injects
-/// instructions on every run, so a skill manifest reloaded mid-session reaches
-/// the next turn instead of freezing at session creation; and it keeps prompt
-/// assembly out of the turn orchestrator entirely.
+/// <para>
+/// The agent here is the workflow-backed <see cref="AIAgent"/> produced by
+/// <see cref="AgentGraphComposer"/>, not a <c>ChatClientAgent</c>. That is the
+/// whole reason the seam exists: <c>AsAIAgent(Workflow, ...)</c> returns an
+/// agent, so adopting a handoff graph changed the composition and this class,
+/// and left <see cref="IAgentRunService"/>, <c>ChatService</c>, the endpoints,
+/// the streaming path, and the session store untouched.
+/// </para>
 /// </summary>
 public sealed class AgentRunService : IAgentRunService
 {
-    private readonly ChatClientAgent _agent;
-    private readonly ChatClientAgentRunOptions _runOptions;
+    private readonly ComposedAgentGraph _graph;
 
-    public AgentRunService(
-        IChatClient chatClient,
-        ISkillService skillService,
-        ISpecialistCatalog catalog)
+    public AgentRunService(AgentGraphComposer composer, IChatClient chatClient, ISkillService skillService, ISpecialistCatalog catalog)
     {
-        _agent = chatClient.AsAIAgent(
-            name: AgentInstructions.AgentName,
-            description: AgentInstructions.AgentDescription,
-            instructions: AgentInstructions.ComposeSystemPrompt(
-                skillService.GetManifest(),
-                catalog.ActionBlocks));
-
-        _runOptions = new ChatClientAgentRunOptions(new ChatOptions
-        {
-            Tools = catalog.AllTools,
-            ToolMode = ChatToolMode.Auto,
-        });
+        _graph = composer.Compose(chatClient, skillService, catalog);
     }
 
+    /// <summary>The composed graph, for the per-agent assertions and routing diagnostics.</summary>
+    public ComposedAgentGraph Graph => _graph;
+
     public ValueTask<AgentSession> CreateSessionAsync(CancellationToken cancellationToken = default)
-        => _agent.CreateSessionAsync(cancellationToken);
+        => _graph.Agent.CreateSessionAsync(cancellationToken);
 
     public Task<AgentResponse> RunAsync(
         IList<ChatMessage> messages,
         AgentSession session,
         CancellationToken cancellationToken = default)
-        => _agent.RunAsync(messages, session, _runOptions, cancellationToken);
+        => _graph.Agent.RunAsync(messages, session, cancellationToken: cancellationToken);
 
     public IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(
         IList<ChatMessage> messages,
         AgentSession session,
         CancellationToken cancellationToken = default)
-        => _agent.RunStreamingAsync(messages, session, _runOptions, cancellationToken);
+        => _graph.Agent.RunStreamingAsync(messages, session, cancellationToken: cancellationToken);
 }

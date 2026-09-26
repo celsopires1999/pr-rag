@@ -11,8 +11,15 @@ namespace PrRag.Application.Services.Agents;
 /// </summary>
 public sealed class AgentTurnContext
 {
-    /// <summary>The session the current turn is running against.</summary>
+    /// <summary>The per-turn MAF session. Fresh every turn — see <see cref="AgentSessionState"/>.</summary>
     public AgentSession? Session { get; set; }
+
+    /// <summary>
+    /// The conversation state that outlives the turn. The tools reach the active
+    /// skill and the staged draft through this rather than the session, because the
+    /// session is discarded when the turn ends and those must not be.
+    /// </summary>
+    public AgentSessionState? State { get; set; }
 
     /// <summary>The client-facing session id the turn belongs to.</summary>
     public string? SessionId { get; set; }
@@ -46,9 +53,10 @@ public sealed class AgentTurnContext
     /// </summary>
     public bool RequisitionPersisted { get; set; }
 
-    public void Begin(AgentSession session, string sessionId, int topK, double minSimilarity)
+    public void Begin(AgentSession session, AgentSessionState state, string sessionId, int topK, double minSimilarity)
     {
         Session = session;
+        State = state;
         SessionId = sessionId;
         TopK = topK;
         MinSimilarity = minSimilarity;

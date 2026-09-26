@@ -1,3 +1,4 @@
+using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Domain;
 using PrRag.Application.Services.Agents;
@@ -179,9 +180,9 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     ];
 
     [Fact]
-    public async Task Skill_session_state_activates_injects_and_clears()
+    public void Skill_session_state_activates_injects_and_clears()
     {
-        var session = await TestAgentSession.NewAsync();
+        var session = new AgentSessionState();
 
         var before = SkillSessionState.DescribeForReport(session);
         Assert.False(before.Active);
@@ -205,9 +206,9 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Requisition_draft_state_stages_presents_confirms_and_clears()
+    public void Requisition_draft_state_stages_presents_confirms_and_clears()
     {
-        var session = await TestAgentSession.NewAsync();
+        var session = new AgentSessionState();
         var draft = new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza");
 
         var empty = RequisitionDraftSessionState.Read(session);
@@ -241,7 +242,7 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     [Fact]
     public async Task Re_drafting_clears_the_previous_confirmation()
     {
-        var session = await TestAgentSession.NewAsync();
+        var session = new AgentSessionState();
         var first = new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza");
         var revised = first with { Quantity = 5m };
 
@@ -261,7 +262,7 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     [Fact]
     public async Task Confirming_without_a_staged_draft_is_refused()
     {
-        var session = await TestAgentSession.NewAsync();
+        var session = new AgentSessionState();
 
         Assert.False(RequisitionDraftSessionState.MarkConfirmed(session));
 
@@ -271,9 +272,9 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Requisition_draft_state_reports_progress_flags()
+    public void Requisition_draft_state_reports_progress_flags()
     {
-        var session = await TestAgentSession.NewAsync();
+        var session = new AgentSessionState();
 
         var empty = RequisitionDraftSessionState.Read(session);
         Assert.Null(empty.Draft);
@@ -289,5 +290,152 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
         RequisitionDraftSessionState.MarkConfirmed(session);
         var confirmed = RequisitionDraftSessionState.Read(session);
         Assert.Equal((true, true, true), (confirmed.Draft is not null, confirmed.Presented, confirmed.Confirmed));
+    }
+    /// <summary>
+    /// The partition restated per agent rather than per capability unit.
+    /// </summary>
+    /// <remarks>
+    /// A unit-level partition is the weaker claim: two units can each hold a
+    /// clean, disjoint set of tools and still land on the same agent, which
+    /// would hand that agent a capability it was never told about. Grouping by
+    /// the owning agent is the shape the model actually sees, so that is what is
+    /// asserted — every wire name on exactly one agent, and the orchestrator
+    /// holding nothing that belongs to the participant.
+    /// </remarks>
+    [Fact]
+    public void Each_tool_is_assigned_to_exactly_one_agent()
+    {
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        // A unit with no slug has not been extracted: its tools stay on the
+        // orchestrator, which is what makes it the orchestrator's.
+        var byAgent = catalog.Specialists
+            .GroupBy(s => s.AgentSlug ?? AgentIds.Orchestrator, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.SelectMany(s => s.Tools).Select(t => t.Name).ToList(),
+                StringComparer.Ordinal);
+
+        Assert.Equal(2, byAgent.Count);
+
+        // The participant holds the read-only capability and nothing else.
+        var retrieval = byAgent[AgentIds.Retrieval];
+        Assert.Equal(
+            new[] { ToolNames.SearchByCodes, ToolNames.SearchSemantic, ToolNames.GetSuppliersByItem }
+                .OrderBy(n => n, StringComparer.Ordinal),
+            retrieval.OrderBy(n => n, StringComparer.Ordinal));
+
+        // The orchestrator holds the four it still owns: the three write tools
+        // and skill activation. It must hold no read tool, or a creation turn
+        // could retrieve instead of drafting.
+        var orchestrator = byAgent[AgentIds.Orchestrator];
+        Assert.Equal(
+            new[]
+            {
+                ToolNames.ActivateSkill,
+                ToolNames.CreateRequisitionDraft,
+                ToolNames.ConfirmRequisitionDraft,
+                ToolNames.CreateRequisition,
+            }.OrderBy(n => n, StringComparer.Ordinal),
+            orchestrator.OrderBy(n => n, StringComparer.Ordinal));
+
+        // Exactly the seven wire names, once each, across the two agents.
+        var union = byAgent.Values.SelectMany(v => v).ToList();
+        Assert.Equal(7, union.Count);
+        Assert.Equal(7, union.Distinct(StringComparer.Ordinal).Count());
+        Assert.Empty(orchestrator.Intersect(retrieval, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A display rename must not be able to repoint routing or telemetry.
+    /// </summary>
+    /// <remarks>
+    /// <c>AgentSlug</c> is init-only on purpose. A handoff resolves participants
+    /// by <c>AIAgent.Id</c>, and telemetry is recorded under the same slug, so a
+    /// setter would let a cosmetic change silently move both. Asserting the
+    /// modifier is what makes the guarantee structural rather than a convention
+    /// someone has to remember.
+    /// </remarks>
+    [Fact]
+    public void A_display_rename_cannot_change_an_agent_slug()
+    {
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        var setter = typeof(SpecialistDefinition)
+            .GetProperty(nameof(SpecialistDefinition.AgentSlug))!
+            .SetMethod!;
+
+        Assert.True(
+            setter.ReturnParameter.GetRequiredCustomModifiers()
+                .Any(m => m.Name == "IsExternalInit"),
+            "SpecialistDefinition.AgentSlug must be init-only, or a display rename can repoint routing.");
+
+        // The slug is the stable constant, not something derived from the label.
+        var extracted = catalog.Specialists.Where(s => s.IsExtracted).ToList();
+        Assert.Equal(new[] { AgentIds.Retrieval }, extracted.Select(s => s.AgentSlug));
+        Assert.All(extracted, s => Assert.NotEqual(s.DisplayName, s.AgentSlug));
+
+        // Renaming the label leaves the slug, and therefore routing, untouched.
+        var renamed = extracted[0] with { DisplayName = "Renamed for a demo" };
+        Assert.Equal(extracted[0].AgentSlug, renamed.AgentSlug);
+        Assert.NotEqual(extracted[0].DisplayName, renamed.DisplayName);
+    }
+
+    /// <summary>
+    /// Every reserved identity is claimed by exactly one unit, every unit claims
+    /// one, and a unit is bound only to the identity it claims.
+    /// </summary>
+    /// <remarks>
+    /// The slugs for the un-extracted capabilities used to be named only in prose
+    /// on <see cref="AgentIds"/>, so a slug reserved for a future extraction was
+    /// indistinguishable from one added by accident, and a unit that reserved an
+    /// identity other than the one it was bound to would still have compiled.
+    /// Reflection over the constants is what makes a newly added slug fail here
+    /// instead of accumulating.
+    /// </remarks>
+    [Fact]
+    public void Every_agent_identity_is_claimed_by_exactly_one_capability()
+    {
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        var units = catalog.Specialists.ToList();
+
+        // No two units may reserve the same identity: they would become the same
+        // agent, and the composer throws only once both are bound.
+        var claimed = units.Select(u => u.ReservedAgentSlug).ToList();
+        Assert.Equal(claimed.Count, claimed.Distinct(StringComparer.Ordinal).Count());
+
+        // The orchestrator is the entry point, not an identity a capability may
+        // reserve, or a unit could bind itself to the front door.
+        Assert.DoesNotContain(AgentIds.Orchestrator, claimed);
+
+        // Binding cannot repoint a unit at an identity it does not own.
+        Assert.All(
+            units.Where(u => u.IsExtracted),
+            u => Assert.Equal(u.ReservedAgentSlug, u.AgentSlug));
+
+        // Every declared identity is claimed, so a constant cannot sit unused
+        // while looking deliberate, and the entry point aside, nothing else can
+        // claim one.
+        var declared = typeof(AgentIds)
+            .GetFields(BindingFlags.Public | BindingFlags.Static)
+            .Where(f => f is { IsLiteral: true, FieldType.FullName: "System.String" })
+            .Select(f => (string)f.GetRawConstantValue()!)
+            .ToList();
+
+        Assert.NotEmpty(declared);
+        Assert.All(declared.Except([AgentIds.Orchestrator]), slug =>
+            Assert.Contains(slug, claimed));
+
+        // The identity a unit will use once extracted is already decided, so
+        // binding it later cannot change what its telemetry is filed under.
+        var bound = units.Where(u => u.IsExtracted).Select(u => u.AgentSlug!).ToHashSet();
+        var unclaimedButReserved = claimed.Where(slug => !bound.Contains(slug)).ToList();
+        Assert.Equal(
+            new[] { AgentIds.Creation, AgentIds.SkillActivation }.OrderBy(s => s, StringComparer.Ordinal),
+            unclaimedButReserved.OrderBy(s => s, StringComparer.Ordinal));
     }
 }

@@ -1,42 +1,34 @@
 using System.Collections.Concurrent;
 using Microsoft.Agents.AI;
 using PrRag.Application.Abstractions;
+using PrRag.Application.Services.Agents;
 
 namespace PrRag.Application.Services;
 
 /// <summary>
-/// In-memory, per-process store of agent sessions keyed by a client-supplied
-/// session identifier. Sessions are lost on restart.
+/// In-memory, per-process store of conversation state keyed by a client-supplied
+/// session identifier. Lost on restart.
 /// </summary>
 public sealed class InMemoryAgentSessionStore : IAgentSessionStore
 {
-    private readonly ConcurrentDictionary<string, Lazy<ValueTask<AgentSession>>> _sessions = new();
+    private readonly ConcurrentDictionary<string, AgentSessionState> _states = new(StringComparer.Ordinal);
 
-    public async Task<(AgentSession Session, bool Created)> GetOrCreateAsync(
+    public AgentSessionState GetOrCreate(string sessionId)
+        => _states.GetOrAdd(sessionId, static _ => new AgentSessionState());
+
+    public ValueTask<AgentSession> BeginTurnAsync(
         string sessionId,
         Func<ValueTask<AgentSession>> create,
         CancellationToken cancellationToken = default)
     {
-        var newLazy = new Lazy<ValueTask<AgentSession>>(create, LazyThreadSafetyMode.ExecutionAndPublication);
-        var lazy = _sessions.GetOrAdd(sessionId, newLazy);
-        var created = ReferenceEquals(lazy, newLazy);
-
-        try
-        {
-            var session = await lazy.Value.AsTask().WaitAsync(cancellationToken);
-            return (session, created);
-        }
-        catch
-        {
-            // A failed factory must not poison the store for later retries.
-            _sessions.TryRemove(new KeyValuePair<string, Lazy<ValueTask<AgentSession>>>(sessionId, lazy));
-            throw;
-        }
+        cancellationToken.ThrowIfCancellationRequested();
+        GetOrCreate(sessionId);
+        return create();
     }
 
     public Task<bool> RemoveAsync(string sessionId, CancellationToken cancellationToken = default)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return Task.FromResult(_sessions.TryRemove(sessionId, out _));
+        return Task.FromResult(_states.TryRemove(sessionId, out _));
     }
 }

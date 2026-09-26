@@ -13,7 +13,7 @@ public class SessionEndpointsTests
     {
         var store = new InMemoryAgentSessionStore();
         var sessionId = Guid.NewGuid().ToString("N");
-        await store.GetOrCreateAsync(sessionId, TestAgentSession.NewAsync);
+        var before = store.GetOrCreate(sessionId);
 
         var result = await SessionEndpoints.Discard(sessionId, store, CancellationToken.None);
 
@@ -21,9 +21,8 @@ public class SessionEndpointsTests
         await result.ExecuteAsync(context);
         Assert.Equal(204, context.Response.StatusCode);
 
-        // The stored session is gone; the next look-up starts fresh.
-        var (_, created) = await store.GetOrCreateAsync(sessionId, TestAgentSession.NewAsync);
-        Assert.True(created);
+        // The conversation is gone; the next turn starts from a blank state.
+        Assert.NotSame(before, store.GetOrCreate(sessionId));
     }
 
     [Fact]
