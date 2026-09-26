@@ -6,10 +6,16 @@ namespace PrRag.Application.Services.Agents;
 /// Single source for the purchase-requisition agent's identity and compiled
 /// instructions. Prompt fragments are kept here, not in the chat orchestrator,
 /// mirroring the AgentLab separation of composition from orchestration.
+///
+/// <see cref="CoreInstructions"/> holds only cross-cutting text. The per-tool
+/// <c>&lt;ALLOWED_ACTIONS&gt;</c> bullets do not live here: each one sits in the
+/// <c>ActionBlock</c> of the capability unit that implements the tool it
+/// describes, so prose and code cannot drift apart. This type stitches those
+/// blocks in between the core text and the skills section.
 /// </summary>
 public static class AgentInstructions
 {
-    public const string AgentName = "purchase-requisition-agent";
+    public const string AgentName = "purchase-requisition-orchestrator";
 
     public const string AgentDescription =
         "Answers questions about purchase requisitions and guides purchase-requisition workflows.";
@@ -25,11 +31,34 @@ public static class AgentInstructions
         """;
 
     /// <summary>
-    /// Compiles the final system prompt for a new session, appending the current
-    /// skill manifest to the core instructions.
+    /// The rule that skill activation comes before any other action. It lives
+    /// here, next to the guide it qualifies, rather than in
+    /// <see cref="CoreInstructions"/>, so that it is emitted only when there is
+    /// actually a skill to activate. Previously it sat in the always-present core
+    /// text, which told the model to check a skill catalog even on a prompt that
+    /// simultaneously claimed the catalog was empty.
     /// </summary>
-    public static string ComposeSystemPrompt(IReadOnlyList<SkillManifestEntry> manifest)
+    private const string SkillsPrecedence =
+        """
+        IMPORTANT: always check if there is a matching skill before taking any other action. If a skill matches, call `activate_skill` and follow its instructions step by step. Do not attempt to handle the workflow yourself.
+        """;
+
+    /// <summary>
+    /// Compiles the final system prompt for a session, stitching the core text,
+    /// the capability units' action blocks, and the current skill manifest
+    /// together.
+    /// </summary>
+    /// <param name="manifest">The skills currently on disk.</param>
+    /// <param name="actionBlocks">
+    /// The per-capability <c>&lt;ALLOWED_ACTIONS&gt;</c> blocks, which complete
+    /// the section header that ends <see cref="CoreInstructions"/>.
+    /// </param>
+    public static string ComposeSystemPrompt(
+        IReadOnlyList<SkillManifestEntry> manifest,
+        IReadOnlyList<string> actionBlocks)
     {
+        var actions = string.Join("\n", actionBlocks);
+
         // With no skills loaded the guide is omitted rather than left to
         // contradict "No skills are available." by telling the model to call
         // activate_skill for a matching intent.
@@ -37,6 +66,7 @@ public static class AgentInstructions
         {
             return $"""
                 {CoreInstructions}
+                {actions}
 
                 ## <AVAILABLE_SKILLS>
                 No skills are available.
@@ -47,14 +77,24 @@ public static class AgentInstructions
 
         return $"""
             {CoreInstructions}
+            {actions}
 
             ## <AVAILABLE_SKILLS>
             {skillsSection}
 
             {SkillsGuide}
+
+            {SkillsPrecedence}
             """;
     }
 
+    /// <summary>
+    /// The cross-cutting prompt text: agent identity, the ReAct loop, the shared
+    /// reference material, and the guardrails that apply to every capability.
+    /// The <c>&lt;ALLOWED_ACTIONS&gt;</c> header closes it, because the bullets
+    /// that follow are contributed by the capability units and appended by
+    /// <see cref="ComposeSystemPrompt"/>.
+    /// </summary>
     public const string CoreInstructions =
         """
         You are an expert, highly precise AI assistant managing purchase requisitions. You execute tasks systematically using a ReAct (Reasoning and Acting) framework. 
@@ -67,22 +107,6 @@ public static class AgentInstructions
         Repeat this cycle until you have gathered sufficient context. Once ready, present your response to the user that can be either a informative answer or a question to clarify missing details. Your response must be concise, accurate, and grounded in the data you have retrieved.
 
         Do not output any reasoning or observations to the user. Only your final answer should be communicated.
-
-        ## <ALLOWED_ACTIONS>
-        You may output a **Final Answer** or call exactly ONE of the following tools per step:
-        * **`search_by_codes`**: Use when the user provides exact ITM-* item codes or SUP* supplier codes. Returns basic requisition details (e.g., descriptions). *Note: Does NOT return quantity or date information.*
-        * **`search_semantic`**: Use when the user asks about requisitions by meaning, general description, or keywords. Before calling, rewrite the user's question into a short, keyword-rich English query optimized for cosine similarity search. Resolve conversational references (e.g., "that one", "as seen earlier") using conversation history.
-        * **`get_suppliers_by_item`**: Use when the user asks which suppliers provided, supplied, or sell a specific item (e.g., "What are the suppliers that provided the item ITM-00000000000000000008?"). Extract the item code (ITM-*) from the question and call it. If the user gives only the item name, resolve it to the code first via `search_semantic`. Returns the distinct SupplierCode + SupplierName list — echo it without inventing entries.
-        * **`activate_skill`**: You MUST call this whenever the user's request matches a skill listed in `<AVAILABLE_SKILLS>`, in ANY wording. This includes the plainest phrasings — "I need to create a purchase requisition", "create a new requisition", "draft a requisition", "I want to place a purchase request" — not only requests that name the skill. Activating a matching skill is how you produce a guided, step-by-step conversation instead of improvising one, so do it on the first step rather than trying to handle the workflow yourself.
-        * **`create_requisition_draft`**: Stage the six requisition fields once you have collected them from the user. Writes nothing to the database.
-        * **`confirm_requisition_draft`**: Record the user's explicit yes after you have presented the staged draft and asked for confirmation.
-        * **`create_requisition`**: Persist the requisition. It is REFUSED unless a draft the user confirmed exists, so it is your LAST step, never your first.
-            * *Required parameters (must be extracted from user input):* `supplierCode`, `item`, `description`, `quantity` (positive number), `date` (ISO format yyyy-MM-dd), `requester`.
-
-        IMPORTANT: always check if there is a matching skill before taking any other action. If a skill matches, call `activate_skill` and follow its instructions step by step. Do not attempt to handle the workflow yourself.
-
-        Never call `create_requisition` directly, and never treat the user's listing of the fields as their
-        confirmation of the draft. A field list is not consent: the user must respond to the draft you presented.
 
         ## <DATA_DICTIONARY>
         When reasoning, adhere to these definitions:
@@ -97,5 +121,8 @@ public static class AgentInstructions
         * **Language Match:** Always output your Final Answer in the same language the user speaks.
         * **Creation Limits:** NEVER create a requisition without explicit user confirmation. NEVER create more than one requisition per session.
         * **Data Blindspots:** Historical records lack `date`, `quantity`, and `price`. Therefore, you are strictly unable to determine which requisition is the newest, oldest, largest, smallest, most expensive, or least expensive.
+
+        ## <ALLOWED_ACTIONS>
+        You may output a **Final Answer** or call exactly ONE of the following tools per step:
         """;
 }

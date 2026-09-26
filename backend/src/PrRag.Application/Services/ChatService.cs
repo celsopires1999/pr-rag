@@ -19,7 +19,6 @@ public sealed class ChatService : IChatService
 {
     private readonly IAgentRunService _runService;
     private readonly IAgentSessionStore _sessionStore;
-    private readonly ISkillService _skillService;
     private readonly AgentTurnContext _turnContext;
     private readonly IRagReportWriter _reportWriter;
     private readonly ILogger<ChatService> _logger;
@@ -28,7 +27,6 @@ public sealed class ChatService : IChatService
     public ChatService(
         IAgentRunService runService,
         IAgentSessionStore sessionStore,
-        ISkillService skillService,
         AgentTurnContext turnContext,
         IRagReportWriter reportWriter,
         ILogger<ChatService> logger,
@@ -36,7 +34,6 @@ public sealed class ChatService : IChatService
     {
         _runService = runService;
         _sessionStore = sessionStore;
-        _skillService = skillService;
         _turnContext = turnContext;
         _reportWriter = reportWriter;
         _logger = logger;
@@ -53,14 +50,14 @@ public sealed class ChatService : IChatService
         var topK = topKFromRequest ? request.TopK : _ragSettings.TopK;
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
-        var (session, created) = await _sessionStore.GetOrCreateAsync(
+        var (session, _) = await _sessionStore.GetOrCreateAsync(
             sessionId,
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
         _turnContext.Begin(session, sessionId, topK, minSimilarity);
 
-        var messages = BuildTurnMessages(request.Question, created);
+        var messages = BuildTurnMessages(request.Question);
         var response = await _runService.RunAsync(messages, session, cancellationToken);
 
         var answer = response.Text;
@@ -84,14 +81,14 @@ public sealed class ChatService : IChatService
         var topK = topKFromRequest ? request.TopK : _ragSettings.TopK;
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
-        var (session, created) = await _sessionStore.GetOrCreateAsync(
+        var (session, _) = await _sessionStore.GetOrCreateAsync(
             sessionId,
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
         _turnContext.Begin(session, sessionId, topK, minSimilarity);
 
-        var messages = BuildTurnMessages(request.Question, created);
+        var messages = BuildTurnMessages(request.Question);
         var latestText = new System.Text.StringBuilder();
         await foreach (var update in _runService.RunStreamingAsync(messages, session, cancellationToken))
         {
@@ -111,19 +108,17 @@ public sealed class ChatService : IChatService
     }
 
     /// <summary>
-    /// Builds the messages for a single turn. Only a brand-new session receives
-    /// the system prompt; the <see cref="Microsoft.Agents.AI.AgentSession"/>
-    /// accumulates history across runs, so later turns only need the current
-    /// user message. An active skill whose guidance has not been injected yet is
-    /// re-injected as an extra system message.
+    /// Builds the messages for a single turn. The system prompt is not built
+    /// here: it is supplied by the agent's own instructions, which the agent
+    /// injects on every run, so it is recomposed per request and cannot go stale
+    /// when the skill manifest changes under a live session. The
+    /// <see cref="Microsoft.Agents.AI.AgentSession"/> accumulates history across
+    /// runs, so a turn only needs the current user message — plus an extra system
+    /// message carrying an active skill whose guidance has not been injected yet.
     /// </summary>
-    private List<ChatMessage> BuildTurnMessages(string question, bool created)
+    private List<ChatMessage> BuildTurnMessages(string question)
     {
         var messages = new List<ChatMessage>();
-        if (created)
-        {
-            messages.Add(new ChatMessage(ChatRole.System, AgentInstructions.ComposeSystemPrompt(_skillService.GetManifest())));
-        }
 
         var session = _turnContext.Session!;
         var skillBody = SkillSessionState.ReadActiveSkillBody(session);

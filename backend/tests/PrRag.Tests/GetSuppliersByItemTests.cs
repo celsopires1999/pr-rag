@@ -97,7 +97,7 @@ public class GetSuppliersByItemTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
             "call_get_suppliers",
-            PurchaseRequisitionTools.GetSuppliersByItemTool,
+            ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?>
             {
                 ["item"] = "ITM0001",
@@ -140,7 +140,7 @@ public class GetSuppliersByItemTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
             "call_get_suppliers",
-            PurchaseRequisitionTools.GetSuppliersByItemTool,
+            ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?>
             {
                 ["item"] = "ITM9999",

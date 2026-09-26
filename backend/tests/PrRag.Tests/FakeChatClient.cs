@@ -84,7 +84,7 @@ public sealed class FakeChatClient : IChatClient
         CancellationToken cancellationToken = default)
     {
         var snapshot = messages.ToList();
-        var prompt = string.Join("\n", snapshot.Select(m => m.Text));
+        var prompt = BuildPromptText(snapshot, options);
         lock (_lock)
         {
             _calls++;
@@ -145,5 +145,24 @@ public sealed class FakeChatClient : IChatClient
 
     public void Dispose()
     {
+    }
+
+    /// <summary>
+    /// Everything the model is actually given: the messages plus
+    /// <see cref="ChatOptions.Instructions"/>.
+    ///
+    /// The instructions channel matters because MAF's <c>ChatClientAgent</c> puts
+    /// an agent's <c>Instructions</c> there rather than into a system message. A
+    /// fake that only joined the message texts was therefore blind to the entire
+    /// system prompt, and would have reported a prompt-driven failure as "no
+    /// prompt was sent". Instructions are prepended so the ordering matches what
+    /// a real client sends.
+    /// </summary>
+    private static string BuildPromptText(IReadOnlyList<ChatMessage> messages, ChatOptions? options)
+    {
+        var body = string.Join("\n", messages.Select(m => m.Text));
+        return string.IsNullOrEmpty(options?.Instructions)
+            ? body
+            : options!.Instructions + "\n" + body;
     }
 }

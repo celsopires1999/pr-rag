@@ -5,6 +5,7 @@ using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
 using PrRag.Application.DTOs;
 using PrRag.Application.Services.Agents;
+using PrRag.Application.Services.Agents.Specialists;
 using PrRag.Infrastructure.Persistence;
 using Xunit;
 
@@ -107,7 +108,7 @@ public class ToolSchemaTests : IAsyncLifetime
     [Fact]
     public void Optional_code_search_parameters_stay_optional()
     {
-        var schema = SchemaOf(FunctionNamed(PurchaseRequisitionTools.SearchByCodesTool));
+        var schema = SchemaOf(FunctionNamed(ToolNames.SearchByCodes));
 
         var required = schema.TryGetProperty("required", out var requiredProperty)
             ? requiredProperty.EnumerateArray().Select(e => e.GetString()).ToArray()
@@ -125,7 +126,7 @@ public class ToolSchemaTests : IAsyncLifetime
 
         chatClient.ScriptedToolCalls.Add(new FunctionCallContent(
             "call_suppliers",
-            PurchaseRequisitionTools.GetSuppliersByItemTool,
+            ToolNames.GetSuppliersByItem,
             new Dictionary<string, object?> { ["item"] = "ITM0001" }));
 
         await chat.AnswerAsync(new ChatRequest
@@ -153,9 +154,9 @@ public class ToolSchemaTests : IAsyncLifetime
     {
         foreach (var name in new[]
         {
-            PurchaseRequisitionTools.CreateRequisitionDraftTool,
-            PurchaseRequisitionTools.ConfirmRequisitionDraftTool,
-            PurchaseRequisitionTools.CreateRequisitionTool,
+            ToolNames.CreateRequisitionDraft,
+            ToolNames.ConfirmRequisitionDraft,
+            ToolNames.CreateRequisition,
         })
         {
             var function = FunctionNamed(name);
@@ -199,8 +200,8 @@ public class ToolSchemaTests : IAsyncLifetime
 
         var result = chatClient.LastToolResultJson();
         Assert.Contains("\"success\":false", result.Replace(" ", ""));
-        Assert.Contains(PurchaseRequisitionTools.CreateRequisitionDraftTool, result);
-        Assert.Contains(PurchaseRequisitionTools.ConfirmRequisitionDraftTool, result);
+        Assert.Contains(ToolNames.CreateRequisitionDraft, result);
+        Assert.Contains(ToolNames.ConfirmRequisitionDraft, result);
 
         using var verify = _provider!.CreateScope();
         var db = verify.ServiceProvider.GetRequiredService<PrRagDbContext>();
@@ -227,7 +228,7 @@ public class ToolSchemaTests : IAsyncLifetime
 
         var result = chatClient.LastToolResultJson();
         Assert.Contains("\"success\":false", result.Replace(" ", ""));
-        Assert.Contains(PurchaseRequisitionTools.ConfirmRequisitionDraftTool, result);
+        Assert.Contains(ToolNames.ConfirmRequisitionDraft, result);
 
         using var verify = _provider!.CreateScope();
         var db = verify.ServiceProvider.GetRequiredService<PrRagDbContext>();
@@ -460,8 +461,8 @@ public class ToolSchemaTests : IAsyncLifetime
     {
         using var scope = _provider!.CreateScope();
         return scope.ServiceProvider
-            .GetRequiredService<PurchaseRequisitionTools>()
-            .All
+            .GetRequiredService<ISpecialistCatalog>()
+            .AllTools
             .OfType<AIFunction>()
             .ToList();
     }

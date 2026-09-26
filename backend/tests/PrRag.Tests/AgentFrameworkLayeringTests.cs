@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Domain;
 using PrRag.Application.Services.Agents;
+using PrRag.Application.Services.Agents.Specialists;
 using Xunit;
 
 namespace PrRag.Tests;
@@ -44,7 +45,7 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
             new SkillManifestEntry("reconcile-invoices", "Guides matching invoices to requisitions"),
         };
 
-        var prompt = AgentInstructions.ComposeSystemPrompt(manifest);
+        var prompt = AgentInstructions.ComposeSystemPrompt(manifest, ActionBlocks());
 
         Assert.Contains(AgentInstructions.CoreInstructions, prompt);
         Assert.Contains("create-purchase-requisition: Guides drafting a new purchase requisition", prompt);
@@ -54,31 +55,128 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
     [Fact]
     public async Task Agent_instructions_compose_prompt_with_empty_manifest()
     {
-        var prompt = AgentInstructions.ComposeSystemPrompt(Array.Empty<SkillManifestEntry>());
+        var prompt = AgentInstructions.ComposeSystemPrompt(Array.Empty<SkillManifestEntry>(), ActionBlocks());
 
         Assert.Contains("No skills are available.", prompt);
     }
 
+    /// <summary>
+    /// An empty manifest means there is nothing to activate, so the prompt must
+    /// not also tell the model to check the skill catalog before acting. The
+    /// empty-manifest branch used to emit that rule unconditionally, so the
+    /// prompt contradicted itself.
+    /// </summary>
     [Fact]
-    public async Task Purchase_requisition_tools_expose_the_fixed_tools()
+    public async Task Empty_manifest_prompt_does_not_tell_the_model_to_consult_the_catalog()
+    {
+        var prompt = AgentInstructions.ComposeSystemPrompt(Array.Empty<SkillManifestEntry>(), ActionBlocks());
+
+        Assert.DoesNotContain("check if there is a matching skill", prompt);
+        Assert.DoesNotContain("Available skills guide recurring workflows.", prompt);
+    }
+
+    /// <summary>
+    /// With skills present, the precedence rule and the guide must both be
+    /// present — the fix above must not silence them.
+    /// </summary>
+    [Fact]
+    public async Task Non_empty_manifest_prompt_keeps_the_skill_precedence_rule()
+    {
+        var manifest = new[]
+        {
+            new SkillManifestEntry("create-purchase-requisition", "Guides drafting a new purchase requisition"),
+        };
+
+        var prompt = AgentInstructions.ComposeSystemPrompt(manifest, ActionBlocks());
+
+        Assert.Contains("check if there is a matching skill", prompt);
+        Assert.Contains("Available skills guide recurring workflows.", prompt);
+    }
+
+    [Fact]
+    public async Task Agent_name_is_the_orchestrator()
+    {
+        Assert.Equal("purchase-requisition-orchestrator", AgentInstructions.AgentName);
+    }
+
+    /// <summary>
+    /// The capability units must partition the tool set exactly: every one of the
+    /// seven wire names claimed by exactly one unit. An overlap would give the
+    /// model two copies of a tool; a gap would silently drop one.
+    /// </summary>
+    [Fact]
+    public async Task Capability_units_partition_the_seven_tool_names()
     {
         using var scope = _provider!.CreateScope();
-        var tools = scope.ServiceProvider.GetRequiredService<PurchaseRequisitionTools>();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
 
-        var names = tools.All.Select(t => t.Name).ToHashSet();
-
-        Assert.Equal(7, tools.All.Count);
-        Assert.True(names.IsSupersetOf(new[]
+        var expected = new HashSet<string>(StringComparer.Ordinal)
         {
-            PurchaseRequisitionTools.SearchByCodesTool,
-            PurchaseRequisitionTools.SearchSemanticTool,
-            PurchaseRequisitionTools.ActivateSkillTool,
-            PurchaseRequisitionTools.GetSuppliersByItemTool,
-            PurchaseRequisitionTools.CreateRequisitionDraftTool,
-            PurchaseRequisitionTools.ConfirmRequisitionDraftTool,
-            PurchaseRequisitionTools.CreateRequisitionTool,
-        }));
+            ToolNames.SearchByCodes,
+            ToolNames.SearchSemantic,
+            ToolNames.ActivateSkill,
+            ToolNames.GetSuppliersByItem,
+            ToolNames.CreateRequisitionDraft,
+            ToolNames.ConfirmRequisitionDraft,
+            ToolNames.CreateRequisition,
+        };
+
+        var perUnit = catalog.Specialists.ToDictionary(
+            s => s.Id,
+            s => s.Tools.Select(t => t.Name).ToList());
+
+        var all = perUnit.Values.SelectMany(v => v).ToList();
+
+        Assert.Equal(3, catalog.Specialists.Count);
+        Assert.Equal(7, all.Count);
+        Assert.Equal(expected, all.ToHashSet(StringComparer.Ordinal));
+
+        // No wire name may be claimed twice, in any unit.
+        foreach (var (id, names) in perUnit)
+        {
+            Assert.Equal(names.Count, names.Distinct(StringComparer.Ordinal).Count());
+            Assert.NotEmpty(names);
+            Assert.All(names, n => Assert.Contains(n, expected));
+            Assert.All(catalog.Specialists.Where(s => s.Id != id).SelectMany(s => s.Tools),
+                t => Assert.DoesNotContain(t.Name, names));
+        }
+
+        // The partition must also hold at runtime, not just in the definitions.
+        var runtimeNames = catalog.AllTools.Select(t => t.Name).ToList();
+        Assert.Equal(7, runtimeNames.Count);
+        Assert.Equal(expected, runtimeNames.ToHashSet(StringComparer.Ordinal));
     }
+
+    [Fact]
+    public async Task Each_capability_unit_documents_exactly_the_tools_it_owns()
+    {
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        Assert.Equal(3, catalog.ActionBlocks.Count);
+        Assert.Equal(
+            catalog.Specialists.Select(s => s.ActionBlock),
+            catalog.ActionBlocks);
+
+        // Every tool the model can call must be named in some action block, or it
+        // would reach the schema undocumented.
+        var blocks = string.Join("\n", catalog.ActionBlocks);
+        foreach (var tool in catalog.AllTools)
+        {
+            Assert.Contains(tool.Name, blocks);
+        }
+    }
+
+    /// <summary>
+    /// The real action blocks, in the real catalog order, so the prompt tests
+    /// exercise the same text the agent actually ships.
+    /// </summary>
+    private static IReadOnlyList<string> ActionBlocks() =>
+    [
+        RequisitionSearchSpecialist.ActionBlock,
+        RequisitionCreationSpecialist.ActionBlock,
+        SkillActivationSpecialist.ActionBlock,
+    ];
 
     [Fact]
     public async Task Skill_session_state_activates_injects_and_clears()

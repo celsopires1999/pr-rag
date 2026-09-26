@@ -1,10 +1,4 @@
-# Agent Framework Layering
-
-## Purpose
-
-Separate the Microsoft Agent Framework (MAF) integration into distinct, testable layers — composition (agent identity + instructions), tools, orchestration (run service + chat adapter), and session state — so no single class owns the whole agent lifecycle.
-
-## Requirements
+## MODIFIED Requirements
 
 ### Requirement: Layered agent composition
 The system SHALL separate Microsoft Agent Framework usage into distinct, testable layers: (1) composition — agent identity and instructions defined in a dedicated `AgentInstructions`/`AgentSpec` type; (2) capabilities — the RAG/skill tools grouped into per-capability units, each declaring its own `[Description]`-annotated methods and the prompt fragment documenting them; (3) orchestration — a thin `IAgentRunService` called by the chat service, which itself owns only DTO mapping, session resolution, per-turn message assembly, and report writing; and (4) state — skill and per-turn state encapsulated in a dedicated helper over the session state bag.
@@ -44,16 +38,7 @@ The system SHALL keep `ChatService` as a thin adapter that owns DTO mapping, `se
 - **WHEN** the chat service assembles the messages for a turn
 - **THEN** it does not add the compiled system prompt to the message list, because the prompt is supplied through the agent's own instructions rather than injected as a turn message
 
-### Requirement: Tool metadata declared once
-The system SHALL declare each tool's description in exactly one place — the `[Description]` attribute on the handler method — and SHALL NOT restate it in a separate constant or pass it to the registration call. Each tool's wire name SHALL likewise be declared once in the shared wire-name type, as required by *Wire names shared across capability units*.
-
-#### Scenario: Handler description is the single source
-- **WHEN** a tool is registered
-- **THEN** its description is taken verbatim from the `[Description]` attribute on the handler method and is not overridden by a duplicated constant or an explicit registration-time value
-
-#### Scenario: Every registered tool has a description
-- **WHEN** the capability catalog exposes its combined tool list
-- **THEN** every tool in the list has a non-empty description
+## ADDED Requirements
 
 ### Requirement: Wire names shared across capability units
 The system SHALL declare every tool's wire name exactly once in a single shared type consumed by both the tool's registration and its per-turn `RecordToolCall` bookkeeping, and SHALL NOT declare a wire name on an individual capability unit, so that a rename remains a single edit and cannot diverge between the tool exposed to the model and the tool name written to the observability report.
@@ -65,18 +50,3 @@ The system SHALL declare every tool's wire name exactly once in a single shared 
 #### Scenario: Wire names are not owned by a capability unit
 - **WHEN** a capability unit is inspected for its tool names
 - **THEN** the names are referenced from the shared type rather than declared on that unit, so two units cannot claim the same name
-
-### Requirement: Parameter descriptions reach the tool schema
-The system SHALL bind each tool directly to its `[Description]`-annotated handler method so that the generated JSON schema sent to the chat model is derived from that method's parameters, and every non-cancellation-token parameter of a tool SHALL therefore carry a non-empty description in the generated schema. Parameters that are optional SHALL remain absent from the schema's required list.
-
-#### Scenario: Parameter descriptions are present in the generated schema
-- **WHEN** the tool list is built and a tool's generated JSON schema is inspected
-- **THEN** every parameter of that tool other than the cancellation token has a non-empty `description` property
-
-#### Scenario: Optional parameters stay optional
-- **WHEN** a tool declares a parameter with a default value, such as the `items` and `suppliers` parameters of `search_by_codes`
-- **THEN** that parameter is not listed in the generated schema's required array, and the tool remains callable with only one of the two supplied
-
-#### Scenario: Forwarding lambdas are not used for registration
-- **WHEN** a tool is registered
-- **THEN** the registered delegate is the annotated handler method itself rather than a lambda that forwards to it, so the handler's parameter attributes are visible to schema generation

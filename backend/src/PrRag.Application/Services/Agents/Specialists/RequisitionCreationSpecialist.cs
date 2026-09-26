@@ -1,183 +1,77 @@
 using System.ComponentModel;
-using System.Diagnostics;
 using Microsoft.Extensions.AI;
-using Microsoft.Extensions.Logging;
+using System.Diagnostics;
 using PrRag.Application.Abstractions;
 using PrRag.Application.Domain;
 using PrRag.Application.DTOs;
 
-namespace PrRag.Application.Services.Agents;
+namespace PrRag.Application.Services.Agents.Specialists;
 
 /// <summary>
-/// The seven purchase-requisition tools exposed to the agent. Each handler is a
-/// <c>[Description]</c>-annotated method registered directly via
-/// <c>AIFunctionFactory</c> under its <c>*Tool</c> wire name, so the
-/// descriptions on the methods and their parameters reach the JSON schema the
-/// model sees. Per-turn retrieval parameters and bookkeeping come from the
-/// scoped <see cref="AgentTurnContext"/>.
+/// Creation capability: the three tools that stage, confirm, and persist a
+/// requisition (<c>create_requisition_draft</c>, <c>confirm_requisition_draft</c>,
+/// <c>create_requisition</c>).
 ///
-/// Creation is a three-step flow — <c>create_requisition_draft</c> stages an
-/// unpersisted draft, <c>confirm_requisition_draft</c> records the user's
-/// explicit yes, and only then does <c>create_requisition</c> persist. The
-/// gate lives in <see cref="CreateRequisitionAsync"/> rather than in prompt
-/// text, because the model does not reliably follow advisory instructions.
+/// The confirmation gate lives in <see cref="CreateRequisitionAsync"/>, in code,
+/// not in prompt text: the gate is advisory if it is only prose, and the model
+/// demonstrably skips advisory steps. The prose in <see cref="ActionBlock"/>
+/// restates the gate for the model, but the refusal below is what actually
+/// enforces it. That is why the gate text and the gate implementation live in
+/// the same unit.
 /// </summary>
-public sealed class PurchaseRequisitionTools
+public sealed class RequisitionCreationSpecialist
 {
-    public const string SearchByCodesTool = "search_by_codes";
+    public const string Id = "purchase-requisition-creation-specialist";
 
-    public const string SearchSemanticTool = "search_semantic";
+    public const string DisplayName = "Purchase-requisition creation";
 
-    public const string ActivateSkillTool = "activate_skill";
+    /// <summary>
+    /// The action bullets for this unit's tools plus the creation-gate rules,
+    /// moved verbatim out of <see cref="AgentInstructions.CoreInstructions"/>. The
+    /// gate prose sits here rather than in the core prompt so that the rule the
+    /// model is asked to follow and the code that refuses when it is skipped are
+    /// one unit apart at most.
+    /// </summary>
+    public const string ActionBlock =
+        """
+        * **`create_requisition_draft`**: Stage the six requisition fields once you have collected them from the user. Writes nothing to the database.
+        * **`confirm_requisition_draft`**: Record the user's explicit yes after you have presented the staged draft and asked for confirmation.
+        * **`create_requisition`**: Persist the requisition. It is REFUSED unless a draft the user confirmed exists, so it is your LAST step, never your first.
+            * *Required parameters (must be extracted from user input):* `supplierCode`, `item`, `description`, `quantity` (positive number), `date` (ISO format yyyy-MM-dd), `requester`.
 
-    public const string GetSuppliersByItemTool = "get_suppliers_by_item";
-
-    public const string CreateRequisitionDraftTool = "create_requisition_draft";
-
-    public const string ConfirmRequisitionDraftTool = "confirm_requisition_draft";
-
-    public const string CreateRequisitionTool = "create_requisition";
-
-    private readonly IEmbeddingService _embeddingService;
-    private readonly IPurchaseRequisitionRepository _repository;
-    private readonly ISkillService _skillService;
-    private readonly IRequisitionWriter _requisitionWriter;
-    private readonly AgentTurnContext _turnContext;
-    private readonly ILogger<PurchaseRequisitionTools> _logger;
-    private readonly List<AITool> _tools = [];
+        Never call `create_requisition` directly, and never treat the user's listing of the fields as their
+        confirmation of the draft. A field list is not consent: the user must respond to the draft you presented.
+        """;
 
     private static readonly string[] CreateRequisitionArguments =
         ["supplierCode", "item", "description", "quantity", "date", "requester"];
 
-    public PurchaseRequisitionTools(
-        IEmbeddingService embeddingService,
-        IPurchaseRequisitionRepository repository,
-        ISkillService skillService,
+    private readonly IRequisitionWriter _requisitionWriter;
+    private readonly IPurchaseRequisitionRepository _repository;
+    private readonly AgentTurnContext _turnContext;
+    private readonly SpecialistToolSet _tools;
+    private readonly List<AITool> _ownedTools = [];
+
+    public RequisitionCreationSpecialist(
         IRequisitionWriter requisitionWriter,
+        IPurchaseRequisitionRepository repository,
         AgentTurnContext turnContext,
-        ILogger<PurchaseRequisitionTools> logger)
+        SpecialistToolSet tools)
     {
-        _embeddingService = embeddingService;
-        _repository = repository;
-        _skillService = skillService;
         _requisitionWriter = requisitionWriter;
+        _repository = repository;
         _turnContext = turnContext;
-        _logger = logger;
+        _tools = tools;
 
-        // Register the annotated methods themselves, not forwarding lambdas:
-        // AIFunctionFactory derives the parameter schema from the delegate's
-        // MethodInfo, so a lambda would drop every parameter [Description].
-        RegisterFunction(SearchByCodesTool, SearchByCodesAsync);
-        RegisterFunction(SearchSemanticTool, SearchSemanticAsync);
-        RegisterFunction(ActivateSkillTool, ActivateSkillAsync);
-        RegisterFunction(GetSuppliersByItemTool, GetSuppliersByItemAsync);
-        RegisterFunction(CreateRequisitionDraftTool, CreateRequisitionDraftAsync);
-        RegisterFunction(ConfirmRequisitionDraftTool, ConfirmRequisitionDraftAsync);
-        RegisterFunction(CreateRequisitionTool, CreateRequisitionAsync);
+        _ownedTools.Add(tools.Add(ToolNames.CreateRequisitionDraft, CreateRequisitionDraftAsync));
+        _ownedTools.Add(tools.Add(ToolNames.ConfirmRequisitionDraft, ConfirmRequisitionDraftAsync));
+        _ownedTools.Add(tools.Add(ToolNames.CreateRequisition, CreateRequisitionAsync));
+
+        Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools);
     }
 
-    /// <summary>The fixed tool list bound to the agent.</summary>
-    public IList<AITool> All => _tools;
-
-    private void RegisterFunction(string wireName, Delegate handler)
-    {
-        // No Description override: AIFunctionFactory reads the [Description]
-        // attribute on the method, keeping one source of truth.
-        _tools.Add(AIFunctionFactory.Create(handler, new AIFunctionFactoryOptions { Name = wireName }));
-    }
-
-    private void RecordToolCall(string name, IDictionary<string, object?> arguments)
-    {
-        _turnContext.ToolCalls.Add(new RagToolCall
-        {
-            Name = name,
-            Arguments = new Dictionary<string, object?>(arguments),
-        });
-    }
-
-    private void LogResult(string name, string[] argumentNames, long startedAt, int resultCount) =>
-        _logger.LogInformation(
-            "Tool {ToolName} invoked with {Arguments} returned {ResultCount} item(s) in {ElapsedMs}ms",
-            name,
-            argumentNames,
-            resultCount,
-            (long)Stopwatch.GetElapsedTime(startedAt).TotalMilliseconds);
-
-    [Description(
-        "Search purchase requisitions by exact item codes (ITM-*) and/or supplier codes (SUP*). " +
-        "Returns matching requisitions with their supplier and item details.")]
-    private async Task<ToolSearchResult> SearchByCodesAsync(
-        [Description("The item codes to search for")] IReadOnlyList<string>? items = null,
-        [Description("The supplier codes to search for")] IReadOnlyList<string>? suppliers = null,
-        CancellationToken cancellationToken = default)
-    {
-        var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(SearchByCodesTool, new Dictionary<string, object?>
-        {
-            ["items"] = items,
-            ["suppliers"] = suppliers,
-        });
-
-        var results = await _repository.SearchByCodesAsync(items, suppliers, _turnContext.TopK, cancellationToken);
-        var mapped = results.Select(r => RagRetrievedItem.From(r, null)).ToList();
-        _turnContext.RetrievedItems.AddRange(mapped);
-
-        LogResult(SearchByCodesTool, ["items", "suppliers"], startedAt, mapped.Count);
-        return ToolSearchResult.From(mapped);
-    }
-
-    [Description(
-        "Search purchase requisitions by semantic similarity to the given query text, in any language. " +
-        "Returns the most relevant requisitions.")]
-    private async Task<ToolSearchResult> SearchSemanticAsync(
-        [Description("The query to search for")] string query,
-        CancellationToken cancellationToken = default)
-    {
-        var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(SearchSemanticTool, new Dictionary<string, object?>
-        {
-            ["query"] = query,
-        });
-
-        _turnContext.RewrittenQuery = query;
-
-        var embedding = await _embeddingService.GenerateAsync(query, cancellationToken);
-        var results = await _repository.SearchAsync(embedding, _turnContext.TopK, _turnContext.MinSimilarity, cancellationToken);
-        var mapped = results.Select(r => RagRetrievedItem.From(r.Requisition, r.Similarity)).ToList();
-        _turnContext.RetrievedItems.AddRange(mapped);
-
-        LogResult(SearchSemanticTool, ["query"], startedAt, mapped.Count);
-        return ToolSearchResult.From(mapped);
-    }
-
-    [Description(
-        "Activates a skill by name to guide the conversation. Use it when the user's request matches the intent of " +
-        "one of the available skills listed in the Skills section. Returns the skill's instructions to follow. " +
-        "Unknown skills return an error listing the available skills.")]
-    private async Task<ToolSkillActivation> ActivateSkillAsync(
-        [Description("The name of the skill to activate")] string name,
-        CancellationToken cancellationToken = default)
-    {
-        var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(ActivateSkillTool, new Dictionary<string, object?>
-        {
-            ["name"] = name,
-        });
-
-        var skill = await _skillService.GetSkillAsync(name, cancellationToken);
-        if (skill is null)
-        {
-            var available = _skillService.GetManifest();
-            var names = available.Count == 0 ? "none" : string.Join(", ", available.Select(s => s.Name));
-            var message = $"Unknown skill '{name}'. Available skills: {names}.";
-            LogResult(ActivateSkillTool, ["name"], startedAt, 0);
-            return ToolSkillActivation.NotFound(name, message);
-        }
-
-        SkillSessionState.Activate(_turnContext.Session!, skill.Name, skill.Body);
-        LogResult(ActivateSkillTool, ["name"], startedAt, 1);
-        return ToolSkillActivation.Activated(skill.Name, skill.Body);
-    }
+    /// <summary>This unit's prose and tools, as one value.</summary>
+    public SpecialistDefinition Definition { get; }
 
     [Description(
         "Stages a new purchase requisition as an unconfirmed draft in this session. Nothing is written to the " +
@@ -195,7 +89,7 @@ public sealed class PurchaseRequisitionTools
         CancellationToken cancellationToken = default)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(CreateRequisitionDraftTool, new Dictionary<string, object?>
+        _tools.Record(ToolNames.CreateRequisitionDraft, new Dictionary<string, object?>
         {
             ["supplierCode"] = supplierCode,
             ["item"] = item,
@@ -212,7 +106,7 @@ public sealed class PurchaseRequisitionTools
         var validationError = NewPurchaseRequisition.From(draft).Validate();
         if (validationError is not null)
         {
-            LogResult(CreateRequisitionDraftTool, CreateRequisitionArguments, startedAt, 0);
+            _tools.Log(ToolNames.CreateRequisitionDraft, CreateRequisitionArguments, startedAt, 0);
             return Task.FromResult(ToolDraftStaged.Rejected(validationError));
         }
 
@@ -220,7 +114,7 @@ public sealed class PurchaseRequisitionTools
         _turnContext.DraftStaged = true;
         _turnContext.DraftPresented = true;
 
-        LogResult(CreateRequisitionDraftTool, CreateRequisitionArguments, startedAt, 1);
+        _tools.Log(ToolNames.CreateRequisitionDraft, CreateRequisitionArguments, startedAt, 1);
         return Task.FromResult(ToolDraftStaged.Ok(
             ToolDraftFields.From(draft),
             "Draft staged. Present these exact values back to the user as a summary and ask for explicit confirmation; " +
@@ -236,7 +130,7 @@ public sealed class PurchaseRequisitionTools
         CancellationToken cancellationToken = default)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(ConfirmRequisitionDraftTool, new Dictionary<string, object?>
+        _tools.Record(ToolNames.ConfirmRequisitionDraft, new Dictionary<string, object?>
         {
             ["answer"] = answer,
         });
@@ -246,7 +140,7 @@ public sealed class PurchaseRequisitionTools
 
         if (snapshot.Draft is null)
         {
-            LogResult(ConfirmRequisitionDraftTool, ["answer"], startedAt, 0);
+            _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 0);
             return Task.FromResult(ToolDraftConfirmation.Declined(
                 "There is no staged requisition draft in this session. Call create_requisition_draft with the six " +
                 "fields first, then ask the user to confirm."));
@@ -254,7 +148,7 @@ public sealed class PurchaseRequisitionTools
 
         if (!snapshot.Presented)
         {
-            LogResult(ConfirmRequisitionDraftTool, ["answer"], startedAt, 0);
+            _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 0);
             return Task.FromResult(ToolDraftConfirmation.Declined(
                 "The draft has not been presented to the user yet. Present the draft as a summary and ask for " +
                 "confirmation before recording it."));
@@ -262,7 +156,7 @@ public sealed class PurchaseRequisitionTools
 
         if (!IsAffirmative(answer))
         {
-            LogResult(ConfirmRequisitionDraftTool, ["answer"], startedAt, 0);
+            _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 0);
             return Task.FromResult(ToolDraftConfirmation.Declined(
                 $"'{answer}' is not an explicit confirmation, so the draft stays unconfirmed. Keep the draft open and " +
                 "ask the user what to change, or whether they want to proceed."));
@@ -270,14 +164,14 @@ public sealed class PurchaseRequisitionTools
 
         if (!RequisitionDraftSessionState.MarkConfirmed(session))
         {
-            LogResult(ConfirmRequisitionDraftTool, ["answer"], startedAt, 0);
+            _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 0);
             return Task.FromResult(ToolDraftConfirmation.Declined(
                 "The draft could not be confirmed. Present the draft again and ask the user to confirm."));
         }
 
         var confirmed = RequisitionDraftSessionState.Read(session).Draft!;
         _turnContext.DraftConfirmed = true;
-        LogResult(ConfirmRequisitionDraftTool, ["answer"], startedAt, 1);
+        _tools.Log(ToolNames.ConfirmRequisitionDraft, ["answer"], startedAt, 1);
         return Task.FromResult(ToolDraftConfirmation.Recorded(
             ToolDraftFields.From(confirmed),
             "Confirmation recorded. Call create_requisition with exactly these values to persist the requisition."));
@@ -300,7 +194,7 @@ public sealed class PurchaseRequisitionTools
         CancellationToken cancellationToken = default)
     {
         var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(CreateRequisitionTool, new Dictionary<string, object?>
+        _tools.Record(ToolNames.CreateRequisition, new Dictionary<string, object?>
         {
             ["supplierCode"] = supplierCode,
             ["item"] = item,
@@ -319,30 +213,30 @@ public sealed class PurchaseRequisitionTools
         if (!snapshot.HasConfirmedDraft)
         {
             var missingStep = snapshot.Draft is null
-                ? CreateRequisitionDraftTool
-                : ConfirmRequisitionDraftTool;
+                ? ToolNames.CreateRequisitionDraft
+                : ToolNames.ConfirmRequisitionDraft;
             var detail = snapshot.Draft is null
                 ? "No requisition draft is staged in this session."
                 : "A draft is staged but the user has not confirmed it.";
 
-            LogResult(CreateRequisitionTool, CreateRequisitionArguments, startedAt, 0);
+            _tools.Log(ToolNames.CreateRequisition, CreateRequisitionArguments, startedAt, 0);
             return ToolRequisitionWrite.RefusedForMissingStep(
                 missingStep,
-                $"Cannot create requisition: {detail} Call {CreateRequisitionDraftTool} to stage the draft, present it, " +
-                $"then {ConfirmRequisitionDraftTool} to record the user's explicit yes, before calling " +
-                $"{CreateRequisitionTool}. Nothing was created.");
+                $"Cannot create requisition: {detail} Call {ToolNames.CreateRequisitionDraft} to stage the draft, present it, " +
+                $"then {ToolNames.ConfirmRequisitionDraft} to record the user's explicit yes, before calling " +
+                $"{ToolNames.CreateRequisition}. Nothing was created.");
         }
 
         var draft = snapshot.Draft!;
         var conflict = FindConflict(draft, supplierCode, item, description, quantity, date, requester);
         if (conflict is not null)
         {
-            LogResult(CreateRequisitionTool, CreateRequisitionArguments, startedAt, 0);
+            _tools.Log(ToolNames.CreateRequisition, CreateRequisitionArguments, startedAt, 0);
             return ToolRequisitionWrite.RefusedForConflict(
                 conflict.Value.Field,
                 conflict.Value.Expected,
                 $"Cannot create requisition: the argument '{conflict.Value.Field}' does not match the confirmed " +
-                $"draft, whose value is '{conflict.Value.Expected}'. Call {CreateRequisitionDraftTool} with the " +
+                $"draft, whose value is '{conflict.Value.Expected}'. Call {ToolNames.CreateRequisitionDraft} with the " +
                 $"corrected values, present it, and have the user confirm again. Nothing was created.");
         }
 
@@ -351,7 +245,7 @@ public sealed class PurchaseRequisitionTools
         var validationError = requisition.Validate();
         if (validationError is not null)
         {
-            LogResult(CreateRequisitionTool, CreateRequisitionArguments, startedAt, 0);
+            _tools.Log(ToolNames.CreateRequisition, CreateRequisitionArguments, startedAt, 0);
             return ToolRequisitionWrite.Rejected(validationError);
         }
 
@@ -362,7 +256,7 @@ public sealed class PurchaseRequisitionTools
 
         if (!combinationExists)
         {
-            LogResult(CreateRequisitionTool, CreateRequisitionArguments, startedAt, 0);
+            _tools.Log(ToolNames.CreateRequisition, CreateRequisitionArguments, startedAt, 0);
             return ToolRequisitionWrite.Rejected(
                 $"Cannot create requisition: supplier {requisition.SupplierCode} has no recorded requisition for item {requisition.Item}. " +
                 "The supplier is not registered for that item, so no requisition was created. " +
@@ -374,7 +268,7 @@ public sealed class PurchaseRequisitionTools
             _turnContext.SessionId,
             cancellationToken);
 
-        LogResult(CreateRequisitionTool, CreateRequisitionArguments, startedAt, result.Success ? 1 : 0);
+        _tools.Log(ToolNames.CreateRequisition, CreateRequisitionArguments, startedAt, result.Success ? 1 : 0);
 
         if (result.Success)
         {
@@ -444,26 +338,4 @@ public sealed class PurchaseRequisitionTools
 
         return null;
     }
-
-    [Description(
-        "Returns the distinct list of suppliers (SupplierCode + SupplierName) that supplied the given item. " +
-        "Use it when the user asks which suppliers provided, supplied, or sell a specific item. Pass the item code " +
-        "(ITM-*) extracted from the question; resolve an item name to its code first via search_by_codes when needed. " +
-        "Each supplier appears exactly once.")]
-    private async Task<ToolSupplierList> GetSuppliersByItemAsync(
-        [Description("The item code (ITM-*) to look up suppliers for")] string item,
-        CancellationToken cancellationToken = default)
-    {
-        var startedAt = Stopwatch.GetTimestamp();
-        RecordToolCall(GetSuppliersByItemTool, new Dictionary<string, object?>
-        {
-            ["item"] = item,
-        });
-
-        var suppliers = await _repository.GetSuppliersByItemAsync(item, cancellationToken);
-
-        LogResult(GetSuppliersByItemTool, ["item"], startedAt, suppliers.Count);
-        return ToolSupplierList.From(suppliers);
-    }
-
 }

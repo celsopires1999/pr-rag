@@ -7,7 +7,7 @@ Integrate the Microsoft Agent Framework (MAF) for agentic chat processing, sessi
 ## Requirements
 
 ### Requirement: MAF agent registration
-The system SHALL register the composed MAF agent via dependency injection, wrapping the existing `IChatClient` with the `AsAIAgent()` extension method using a `ChatClientAgentOptions` derived from a dedicated `AgentInstructions`/`AgentSpec` type (agent name, description, instructions, fixed tool list), and SHALL expose the composed agent to `ChatService` through an `IAgentRunService` abstraction instead of constructing the agent inside the chat service.
+The system SHALL register the composed MAF agent via dependency injection, wrapping the existing `IChatClient` with the `AsAIAgent()` extension method and supplying the agent's name, description, and compiled instructions from a dedicated `AgentInstructions`/`AgentSpec` type, together with the tool list contributed by the capability catalog, and SHALL expose the composed agent to `ChatService` through an `IAgentRunService` abstraction instead of constructing the agent inside the chat service.
 
 #### Scenario: Agent created from existing chat client at composition time
 - **WHEN** the application starts and DI is configured
@@ -17,12 +17,16 @@ The system SHALL register the composed MAF agent via dependency injection, wrapp
 - **WHEN** `ChatService` is constructed
 - **THEN** it receives the `IAgentRunService` (which wraps the composed agent) and does not call `AsAIAgent()` or hold a `ChatClientAgent` it built itself
 
+#### Scenario: Compiled instructions are supplied to the agent rather than as a turn message
+- **WHEN** the agent is composed
+- **THEN** the compiled system prompt is supplied through the agent's instructions, and the chat service does not add it to the per-turn message list
+
 ### Requirement: MAF tool registration
-The system SHALL register the tool functions (`search_by_codes`, `search_semantic`, `activate_skill`, `get_suppliers_by_item`, `create_requisition_draft`, `confirm_requisition_draft`, `create_requisition`) with the composed agent via its `Tools` property, using `AIFunctionFactory.Create` on `[Description]`-annotated methods defined in a dedicated tools class rather than delegates inlined in `ChatService`. Each tool's wire name SHALL come from a shared constant used by both its registration and its `RecordToolCall` entry, so the report cannot drift from the registered name.
+The system SHALL register the tool functions (`search_by_codes`, `search_semantic`, `activate_skill`, `get_suppliers_by_item`, `create_requisition_draft`, `confirm_requisition_draft`, `create_requisition`) with the composed agent from the capability catalog's combined tool list, using `AIFunctionFactory.Create` on `[Description]`-annotated methods defined in per-capability units rather than delegates inlined in `ChatService`. Each tool's wire name SHALL come from a shared constant used by both its registration and its `RecordToolCall` entry, so the report cannot drift from the registered name.
 
 #### Scenario: Tools bound to agent
 - **WHEN** the agent is composed in DI
-- **THEN** it exposes all seven tool functions so that `RunAsync`/`RunStreamingAsync` can invoke them during the agentic reasoning loop
+- **THEN** it exposes all seven tool functions, gathered from the capability catalog, so that `RunAsync`/`RunStreamingAsync` can invoke them during the agentic reasoning loop
 
 #### Scenario: Handler methods registered directly
 - **WHEN** a tool is registered
@@ -39,6 +43,10 @@ The system SHALL register the tool functions (`search_by_codes`, `search_semanti
 #### Scenario: Item supplier lookup tool registered
 - **WHEN** the agent is composed in DI
 - **THEN** `get_suppliers_by_item` is among the registered tools and is callable by the agent to return the distinct suppliers for an item
+
+#### Scenario: Tool set is unchanged by this grouping
+- **WHEN** the capability catalog's combined tool list is compared with the framework's tool set
+- **THEN** the seven tools and their wire names are identical to the pre-grouping set, with none added, removed, or renamed
 
 ### Requirement: Agent session for multi-turn state, keyed by session id
 The system SHALL use a server-side `AgentSession` (managed by an in-memory store keyed by a client-supplied `session_id`) to manage conversation history and tool-call state across turns, replacing manual message reconstruction.
@@ -130,3 +138,22 @@ The system SHALL return tool results as dedicated result DTOs whose properties c
 #### Scenario: Observability report schema is unaffected
 - **WHEN** the RAG observability report is written for a turn whose tools returned the new typed results
 - **THEN** the report's retrieved-item and tool-call fields keep their existing shape and property naming
+
+### Requirement: System prompt is recompiled per request
+The system SHALL supply the compiled system prompt to the agent through the agent's instructions so that it is recomposed for every chat request, and SHALL NOT compose the skill manifest once per session, so that a skill catalog reloaded while a session is live reaches that session's subsequent requests.
+
+#### Scenario: A skill reloaded mid-session reaches later turns
+- **WHEN** the skills directory changes and the skill service reloads while a session with an active conversation is still in use
+- **THEN** the next request in that session is answered against a prompt whose skill manifest reflects the reloaded catalog, rather than the manifest captured when the session was created
+
+#### Scenario: A new session sees the current manifest
+- **WHEN** a session is created after a skill catalog reload
+- **THEN** its compiled prompt lists the reloaded skills, as it did before this change
+
+#### Scenario: The instructions channel does not accumulate the prompt across turns
+- **WHEN** a second turn of the same session is sent to the chat model
+- **THEN** the skill manifest is still supplied exactly once, through the agent's instructions on that request, and is not additionally present in the message history, so the framework does not append another copy per turn
+
+#### Scenario: Per-turn message assembly is unaffected
+- **WHEN** a turn is assembled for a request
+- **THEN** the current user message and any not-yet-injected active-skill guidance are still supplied as turn messages, so skill guidance continues to be injected exactly once per activation
