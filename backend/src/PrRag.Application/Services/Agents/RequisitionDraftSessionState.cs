@@ -66,6 +66,21 @@ public static class RequisitionDraftSessionState
     }
 
     /// <summary>
+    /// Whether a draft is staged and not yet written. This is the whole of
+    /// <c>AgentGraphComposer.ResolveEntryPoint</c>'s decision: a staged draft means
+    /// the next turn's business is the creation gate, whether the user said
+    /// "yes" (finish the write) or "no, the quantity is wrong" (re-draft), and
+    /// both answers belong to the agent that owns the gate.
+    /// </summary>
+    /// <remarks>
+    /// A draft that is staged but already confirmed still counts. A confirmed
+    /// draft whose write failed is the most urgent state in the system, and
+    /// treating it as "not pending" would route that turn to the orchestrator,
+    /// which holds no tool that could finish it.
+    /// </remarks>
+    public static bool HasUnwrittenDraft(AgentSessionState? state) => Read(state).Draft is not null;
+
+    /// <summary>
     /// Marks a presented draft as confirmed. Returns false when there is no
     /// draft or it has not been presented, leaving the state unchanged.
     /// </summary>

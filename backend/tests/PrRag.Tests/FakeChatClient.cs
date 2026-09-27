@@ -1,6 +1,7 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.Extensions.AI;
+using PrRag.Application.Services.Agents;
 
 namespace PrRag.Tests;
 
@@ -58,6 +59,25 @@ public sealed class FakeChatClient : IChatClient
     /// </summary>
     public bool AutoHandoff { get; set; }
 
+    /// <summary>
+    /// Which participant <see cref="AutoHandoff"/> transfers to, as a 1-based
+    /// position among the participants the composer adds. Null takes the first
+    /// handoff tool offered, which is only right while a single specialist can
+    /// serve every handoff.
+    ///
+    /// <para>
+    /// The number is positional because the tool name MAF generates is. Tests
+    /// never compute it themselves — <c>HandoffScripting.HandOffTo</c> derives it
+    /// from the catalog, so this type of change is a one-line edit in one place
+    /// rather than a silent breakage of every handoff test.
+    /// </para>
+    /// </summary>
+    public int? AutoHandoffParticipant { get; set; }
+
+    // The positional convention is the application's (HandoffToolName), because the
+    // report resolves real handoffs through it. A second copy here could disagree
+    // with the production mapping and a test would then pass against a wire name no
+    // handoff ever uses.
     private const string HandoffToolPrefix = "handoff_to_";
 
     /// <summary>The handoff tool the last call was offered, if any.</summary>
@@ -266,6 +286,10 @@ public sealed class FakeChatClient : IChatClient
         {
             reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { ScriptedToolCalls[_scriptedIndex++] });
         }
+        else if (TryTakeAutoHandoff(offered, out var handoff))
+        {
+            reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { handoff });
+        }
         else if (ToolCall is { } call && Interlocked.CompareExchange(ref _toolCallConsumed, 1, 0) == 0)
         {
             reply = new ChatMessage(ChatRole.Assistant, new List<AIContent> { call });
@@ -289,7 +313,7 @@ public sealed class FakeChatClient : IChatClient
     /// <summary>
     /// Returns the next scripted call for the agent that was called, identified by
     /// which discriminator tool it was offered. An agent whose queue is exhausted
-    /// falls through to the default answer, which is how the orchestrator ends a
+    /// falls through to the default answer, which is how the entry agent ends a
     /// handoff turn with the specialist's results already in hand.
     /// </summary>
     private bool TryTakeAgentScript(List<string> offeredTools, out FunctionCallContent call)
@@ -315,20 +339,52 @@ public sealed class FakeChatClient : IChatClient
             return true;
         }
 
-        // The calling agent has nothing left scripted, so if it is offered a
-        // handoff tool and auto-handoff is on, transfer rather than answer.
-        if (AutoHandoff)
+        return false;
+    }
+
+    /// <summary>
+    /// The calling agent has nothing left scripted, so if it is offered a handoff
+    /// tool and auto-handoff is on, transfer rather than answer.
+    ///
+    /// <para>
+    /// Checked after the flat <see cref="ScriptedToolCalls"/> queue, not before it.
+    /// That queue is the entry agent's script — it names tools the entry agent
+    /// holds, such as <c>activate_skill</c> — so an entry-agent call must not be
+    /// skipped over by a handoff the test also asked for. Per-agent scripts are
+    /// still consulted first, since a specialist's tools are only ever on offer to
+    /// the specialist.
+    /// </para>
+    /// </summary>
+    private bool TryTakeAutoHandoff(List<string> offeredTools, out FunctionCallContent call)
+    {
+        call = null!;
+        if (!AutoHandoff)
         {
-            var handoff = offeredTools.FirstOrDefault(n => n.StartsWith(HandoffToolPrefix, StringComparison.Ordinal));
-            if (handoff is not null)
-            {
-                LastHandoffToolName = handoff;
-                call = new FunctionCallContent($"handoff_{Guid.NewGuid():N}", handoff, new Dictionary<string, object?>());
-                return true;
-            }
+            return false;
         }
 
-        return false;
+        var handoff = SelectHandoffTool(offeredTools);
+        if (handoff is null)
+        {
+            return false;
+        }
+
+        LastHandoffToolName = handoff;
+        call = new FunctionCallContent($"handoff_{Guid.NewGuid():N}", handoff, new Dictionary<string, object?>());
+        return true;
+    }
+
+    private string? SelectHandoffTool(List<string> offeredTools)
+    {
+        if (AutoHandoffParticipant is null)
+        {
+            return offeredTools.FirstOrDefault(n => n.StartsWith(HandoffToolPrefix, StringComparison.Ordinal));
+        }
+
+        var wanted = HandoffToolName.ForParticipant(AutoHandoffParticipant.Value);
+        return offeredTools.Contains(wanted, StringComparer.Ordinal)
+            ? wanted
+            : null;
     }
 
     public async IAsyncEnumerable<ChatResponseUpdate> GetStreamingResponseAsync(

@@ -46,6 +46,34 @@ public sealed class AgentTurnContext
     public bool DraftConfirmed { get; set; }
 
     /// <summary>
+    /// The capability slug the turn entered at, from
+    /// <see cref="AgentGraphComposer.ResolveEntryPoint"/>. It is deterministic
+    /// application state rather than a model decision, and it is what the report
+    /// needs to say which agent was on the hook for this turn.
+    /// </summary>
+    public string? EntryAgent { get; set; }
+
+    /// <summary>
+    /// The handoffs the turn made, in call order and deduplicated. Empty is
+    /// meaningful: it means no agent handed the turn on, which no other report
+    /// field can distinguish from a handoff that happened.
+    /// </summary>
+    public List<RagHandoff> Handoffs { get; } = new();
+
+    /// <summary>
+    /// Records a handoff once. Deduplicated because a streamed call arrives as one
+    /// update carrying the name and further updates carrying argument deltas, and
+    /// counting those separately would report a fraction of a handoff as several.
+    /// </summary>
+    public void RecordHandoff(string from, string to)
+    {
+        if (!Handoffs.Any(h => h.From == from && h.To == to))
+        {
+            Handoffs.Add(new RagHandoff { From = from, To = to });
+        }
+    }
+
+    /// <summary>
     /// Set when a <c>create_requisition</c> call actually persisted a requisition.
     /// A latch rather than a read of the session draft state, because a
     /// successful creation clears the draft and the report still has to show
@@ -53,9 +81,16 @@ public sealed class AgentTurnContext
     /// </summary>
     public bool RequisitionPersisted { get; set; }
 
-    public void Begin(AgentSession session, AgentSessionState state, string sessionId, int topK, double minSimilarity)
+    /// <summary>
+    /// Establishes the turn's context. Called before the run is composed,
+    /// because the entry point is chosen from <see cref="State"/> — see
+    /// <see cref="AgentGraphComposer.ResolveEntryPoint"/>. The MAF session is
+    /// attached afterwards by <see cref="AttachSession"/>, because the graph
+    /// that owns it is not composed until the state is known.
+    /// </summary>
+    public void Begin(AgentSessionState state, string sessionId, int topK, double minSimilarity)
     {
-        Session = session;
+        Session = null;
         State = state;
         SessionId = sessionId;
         TopK = topK;
@@ -63,9 +98,12 @@ public sealed class AgentTurnContext
         RewrittenQuery = null;
         RetrievedItems.Clear();
         ToolCalls.Clear();
+        Handoffs.Clear();
         DraftStaged = false;
         DraftPresented = false;
         DraftConfirmed = false;
         RequisitionPersisted = false;
     }
+
+    public void AttachSession(AgentSession session) => Session = session;
 }

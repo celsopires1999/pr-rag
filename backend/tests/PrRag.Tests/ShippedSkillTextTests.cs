@@ -19,17 +19,20 @@ namespace PrRag.Tests;
 /// </remarks>
 public class ShippedSkillTextTests
 {
-    /// <summary>The repo root, found by walking up from the test output directory.</summary>
-    private static string SkillsDir { get; } = FindSkillsDir();
+    private static string SkillsDir => RepoFiles.SkillsDir;
 
     [Fact]
     public void The_create_skill_never_instructs_the_agent_to_call_a_tool_it_does_not_own()
     {
         var text = File.ReadAllText(Path.Combine(SkillsDir, "create-purchase-requisition.md"));
 
-        // The orchestrator holds the write tools and activation. The read tools
-        // belong to the retrieval participant, so prose telling the agent to
-        // "call" one is an instruction the agent cannot follow.
+        // The read tools belong to the retrieval participant and the write tools
+        // to the creation participant, so prose telling the agent to "call" one of
+        // the other unit's is an instruction the agent cannot follow. Which unit is
+        // "the" agent moves with the extraction; the rule does not, and neither
+        // does the failure. See
+        // The_create_skill_instructs_calls_only_within_one_capability for the
+        // ownership check that survives the extraction.
         foreach (var foreign in new[] { ToolNames.SearchByCodes, ToolNames.SearchSemantic, ToolNames.GetSuppliersByItem })
         {
             foreach (Match call in Regex.Matches(text, $@"(?i)\bcall(?:ing|s)?\s+`?{Regex.Escape(foreign)}"))
@@ -40,8 +43,9 @@ public class ShippedSkillTextTests
                 Assert.False(
                     !line.Contains("cannot", StringComparison.OrdinalIgnoreCase)
                     && !line.Contains("belongs to another agent", StringComparison.OrdinalIgnoreCase),
-                    $"data/skills/create-purchase-requisition.md instructs the orchestrator to call '{foreign}', " +
-                    "which it does not own. Say the check is done by create_requisition instead.");
+                    $"data/skills/create-purchase-requisition.md instructs the agent to call '{foreign}', " +
+                    "which the agent running the creation flow does not own. Say the check is done by " +
+                    "create_requisition instead.");
             }
         }
     }
@@ -78,24 +82,5 @@ public class ShippedSkillTextTests
         }
 
         Assert.Contains("whether or not this skill is active", text, StringComparison.OrdinalIgnoreCase);
-    }
-
-    private static string FindSkillsDir()
-    {
-        var dir = new DirectoryInfo(AppContext.BaseDirectory);
-
-        while (dir is not null)
-        {
-            var candidate = Path.Combine(dir.FullName, "data", "skills");
-            if (Directory.Exists(candidate))
-            {
-                return candidate;
-            }
-
-            dir = dir.Parent;
-        }
-
-        throw new DirectoryNotFoundException(
-            $"Could not find data/skills above {AppContext.BaseDirectory}.");
     }
 }

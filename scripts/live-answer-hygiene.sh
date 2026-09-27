@@ -28,6 +28,17 @@
 # A turn with no report is a failure, not an unverifiable pass: checks 2 and 4 read
 # the report, so a missing report means the turn was never actually checked.
 #
+# The four checks are not equally negotiable, so they are not averaged together:
+#
+#   HARD   Narration, a claimed search that never ran, an empty answer, a report
+#          claiming a fallback nobody received. These are correctness defects: the
+#          user is told something untrue, and averaging them against a good turn
+#          would hide that. One occurrence fails.
+#   RATE   Whether a cold turn actually attempted a retrieval. Model-dependent, so
+#          it is held to a rate rather than asserted on a single sample.
+#   INFRA  Non-2xx, unparseable, or a missing report. Counted and reported, and
+#          never a pass — a dead provider is not a clean run.
+#
 # Usage:  scripts/live-answer-hygiene.sh [runs]        (default 8)
 # Needs the demo API on :8081 and the ./reports bind mount.
 set -uo pipefail
@@ -56,7 +67,14 @@ grounded=0
 failed_runs=0
 infra_runs=0
 tmp_body=$(mktemp)
-trap 'rm -f "$tmp_body"' EXIT
+OBSERVATIONS=$(mktemp)
+trap 'rm -f "$tmp_body" "$OBSERVATIONS"' EXIT
+
+# A turn that failed before a verdict existed still needs to be recorded, or an
+# unevaluated turn would silently leave the sample smaller than N.
+record() {
+  printf '{"run": %s, "probe": "cold-search", "problems": [["%s", "%s"]]}\n' "$1" "$2" "$3" >> "$OBSERVATIONS"
+}
 
 for i in $(seq 1 "$RUNS"); do
   session="hygiene-$(openssl rand -hex 6)"
@@ -73,6 +91,7 @@ for i in $(seq 1 "$RUNS"); do
     echo "  FAIL  run $i  http=$status  request failed (infrastructure, not a hygiene verdict)"
     infra_runs=$((infra_runs + 1))
     failed_runs=$((failed_runs + 1))
+    record "$i" "INFRA" "http-$status"
     before=$(python3 -c 'import time; print(time.time())')
     continue
   fi
@@ -85,7 +104,7 @@ problems = []
 try:
     response = json.loads(os.environ["RESPONSE"])
 except Exception:
-    print(json.dumps({"problems": ["unparseable-response"], "ret": "?", "attempted": None, "head": ""}))
+    print(json.dumps({"problems": [["INFRA", "unparseable-response"]], "ret": "?", "attempted": None, "head": ""}))
     raise SystemExit(0)
 
 answer = response.get("answer") or ""
@@ -94,7 +113,7 @@ ret = response.get("retrievedCount", 0)
 # 1. No answer at all. Checked first because every other check is vacuous on an
 #    empty answer: there is nothing to narrate and nothing to claim.
 if not answer.strip():
-    problems.append("empty-answer")
+    problems.append(["HARD", "empty-answer"])
 
 # The report is written before the turn is allowed to succeed, so poll briefly
 # rather than assuming it has landed: a missing report would otherwise be
@@ -121,27 +140,27 @@ for f in sorted(reports, key=os.path.getmtime, reverse=True):
         break
 
 if mine is None:
-    problems.append("no-report-for-this-turn")
+    problems.append(["INFRA", "no-report-for-this-turn"])
 else:
     # 2. A cold turn that must search has to search.
     if mine.get("RetrievalAttempted") is not True:
-        problems.append("no-retrieval-attempt")
+        problems.append(["RATE", "no-retrieval-attempt"])
 
     # 4. A claimed search has to be one the report shows.
     claims_search = re.search(
         r"(?i)executed the search|ran the search|i searched|search (?:has been )?run", answer)
     if claims_search and mine.get("RetrievalAttempted") is False:
-        problems.append("claimed-a-search-that-never-ran")
+        problems.append(["HARD", "claimed-a-search-that-never-ran"])
 
     # The report's own fallback flag must not claim an answer the caller never
     # received; that combination is what a dead provider used to look like.
     if not answer.strip() and mine.get("UsedNoContextFallback") is True:
-        problems.append("report-claims-a-fallback-that-was-never-sent")
+        problems.append(["HARD", "report-claims-a-fallback-that-was-never-sent"])
 
 markers = ("Thought:", "Action:", "Observation:", "Plan:", "I will search", "I need to look")
 leaked = [m for m in markers if m in answer]
 if leaked:
-    problems.append("narration(" + ",".join(leaked) + ")")
+    problems.append(["HARD", "narration(" + ",".join(leaked) + ")"])
 
 print(json.dumps({
     "problems": problems,
@@ -152,14 +171,39 @@ print(json.dumps({
 PY
 )
 
-  echo "$verdict" | python3 -c "
-import json, sys
+  if [ -z "$verdict" ]; then
+    echo "  FAIL  run $i  no verdict (infrastructure, not a hygiene verdict)"
+    infra_runs=$((infra_runs + 1))
+    failed_runs=$((failed_runs + 1))
+    record "$i" "INFRA" "no-verdict"
+    continue
+  fi
+
+  # The python prints the human line on stdout and appends its own observation, so
+  # the per-run lines and the aggregate are derived from the same data and cannot
+  # disagree; its exit status is the pass/fail signal.
+  echo "$verdict" | RUN="$i" OBS="$OBSERVATIONS" python3 -c "
+import json, os, sys
+
 v = json.load(sys.stdin)
-tag = 'FAIL ' if v['problems'] else 'ok   '
-print('  %s run %-2s ret=%-2s attempted=%-5s %s %s' % (
-    tag, '$i', v['ret'], v['attempted'], v['head'],
-    ('<- ' + '; '.join(v['problems'])) if v['problems'] else ''))
-sys.exit(1 if v['problems'] else 0)
+problems = v['problems']
+
+tag = 'FAIL ' if problems else 'ok   '
+print('  %s run %-2s ret=%-2s attempted=%-5s %s' % (
+    tag, os.environ['RUN'], v['ret'], v['attempted'], v['head']))
+for severity in ('HARD', 'RATE', 'INFRA'):
+    for problem in problems:
+        if problem and problem[0] == severity:
+            print('       %-5s %s' % (severity, problem[1]))
+
+with open(os.environ['OBS'], 'a') as handle:
+    handle.write(json.dumps({
+        'run': int(os.environ['RUN']),
+        'probe': 'cold-search',
+        'problems': problems,
+    }) + '\n')
+
+sys.exit(1 if problems else 0)
 " && grounded=$((grounded + 1)) || failed_runs=$((failed_runs + 1))
 
   # Only the first turn's report is meaningful for matching; later files are
@@ -168,12 +212,11 @@ sys.exit(1 if v['problems'] else 0)
 done
 
 echo
-echo "clean=$grounded  failed=$failed_runs  (of $RUNS)"
-if [ "$infra_runs" -gt 0 ]; then
-  echo "  ($infra_runs run(s) failed at the transport/provider level, not on hygiene)"
-fi
-if [ "$failed_runs" -gt 0 ]; then
-  echo "ANSWER HYGIENE GATE: FAILED"
-  exit 1
-fi
-echo "ANSWER HYGIENE GATE: passed"
+echo "turns=$((grounded + failed_runs))  clean=$grounded  with-problems=$failed_runs  (of $RUNS)"
+
+# The verdict comes from the recorded observations rather than the counters, so
+# the per-run lines and this summary cannot drift apart.
+python3 scripts/lib/gate_report.py \
+  --label "ANSWER HYGIENE GATE" \
+  --expect-probes cold-search \
+  < "$OBSERVATIONS"

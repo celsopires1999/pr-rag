@@ -47,4 +47,31 @@ public static class ToolNames
             SearchSemantic,
             GetSuppliersByItem,
         };
+
+    /// <summary>
+    /// The tools on the creation path, as opposed to the ones that only read.
+    /// </summary>
+    /// <remarks>
+    /// The mirror of <see cref="ReadOnly"/>, and for the same reason: a report that
+    /// cannot tell a <em>refused</em> <c>create_requisition</c> from a turn that
+    /// never called one cannot be used to check the confirmation gate, because
+    /// both leave <c>RequisitionPersisted</c> false. That is the write-path
+    /// version of the ambiguity <see cref="ReadOnly"/> was introduced to remove,
+    /// and it is why the set is named rather than derived.
+    /// <para>
+    /// It is deliberately not "everything that is not a read":
+    /// <see cref="ActivateSkill"/> is neither, and treating it as a write would
+    /// report a skill activation as a write attempt. <c>create_requisition_draft</c>
+    /// is in the set although it writes nothing to the database — it is on the
+    /// write path, and a turn that staged a draft did take an irreversible step's
+    /// first half.
+    /// </para>
+    /// </remarks>
+    public static readonly IReadOnlySet<string> Writes =
+        new HashSet<string>(StringComparer.Ordinal)
+        {
+            CreateRequisitionDraft,
+            ConfirmRequisitionDraft,
+            CreateRequisition,
+        };
 }

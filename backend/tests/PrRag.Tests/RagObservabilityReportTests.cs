@@ -1,4 +1,5 @@
 using System.Text.Json;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Abstractions;
@@ -6,6 +7,7 @@ using PrRag.Application.Domain;
 using PrRag.Application.DTOs;
 using Xunit;
 using PrRag.Application.Services.Agents;
+using PrRag.Infrastructure.Persistence;
 
 namespace PrRag.Tests;
 
@@ -251,8 +253,7 @@ public class RagObservabilityReportTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.AutoHandoff = false;
-        chatClient.ScriptFor(ToolNames.CreateRequisitionDraft, new FunctionCallContent(
+        RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, new FunctionCallContent(
             "call_1",
             ToolNames.CreateRequisitionDraft,
             new Dictionary<string, object?>
@@ -273,6 +274,122 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.Equal(ToolNames.CreateRequisitionDraft, report.ToolCalls[0].Name);
         Assert.False(report.RetrievalAttempted);
         Assert.Equal(0, report.RetrievedCount);
+
+        // The same tool is a write, so it is the mirror of the fact above rather
+        // than its absence: the two sets are named separately, not inferred from
+        // each other.
+        Assert.True(report.WriteAttempted);
+    }
+
+    /// <summary>
+    /// A refused write is not the absence of a write. The two share every other
+    /// observable in the report, so without the attempt fact the confirmation gate
+    /// can only be verified by querying the table after the fact — which cannot
+    /// tell "attempted and refused" from "never attempted", and so cannot tell a
+    /// model that tried to write from one that never engaged the write path at all.
+    /// </summary>
+    /// <remarks>
+    /// This is the write-path twin of
+    /// <see cref="A_search_that_found_nothing_is_distinguishable_from_never_searching"/>.
+    /// <c>RequisitionPersisted</c> is the write side of <c>RetrievedCount</c>: a
+    /// refusal and an empty result are both zero, and a flag keyed on the outcome
+    /// alone cannot separate them.
+    /// </remarks>
+    [Fact]
+    public async Task A_refused_write_is_distinguishable_from_an_absent_one()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        // No draft, no confirmation: the gate refuses and writes nothing.
+        RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, RequisitionFlow.Create());
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a requisition for ITM0001 from SUP000001",
+        });
+
+        var report = await ReadLastReportAsync(ReportsDir);
+
+        // The attempt is recorded...
+        Assert.True(report.WriteAttempted);
+        Assert.Equal(ToolNames.CreateRequisition, Assert.Single(report.ToolCalls).Name);
+
+        // ...and the outcome is recorded as an outcome, not as an attempt.
+        Assert.False(report.RequisitionDraftStaged);
+        Assert.False(report.RequisitionDraftConfirmed);
+        Assert.False(report.RequisitionPersisted);
+
+        using var verify = _provider.CreateScope();
+        var db = verify.ServiceProvider.GetRequiredService<PrRagDbContext>();
+        Assert.Empty(await db.CreatedRequisitions.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// The other half of that pair: a write that was actually performed, which must
+    /// be distinguishable from a refused one and from no write at all.
+    /// </summary>
+    [Fact]
+    public async Task A_performed_write_records_both_the_attempt_and_the_row()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        RequisitionFlow.ScriptConfirmedCreation(chatClient, scope.ServiceProvider);
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a requisition for ITM0001 from SUP000001",
+        });
+
+        var report = await ReadLastReportAsync(ReportsDir);
+
+        Assert.True(report.WriteAttempted);
+        Assert.True(report.RequisitionDraftStaged);
+        Assert.True(report.RequisitionDraftConfirmed);
+        Assert.True(report.RequisitionPersisted);
+
+        using var verify = _provider.CreateScope();
+        var db = verify.ServiceProvider.GetRequiredService<PrRagDbContext>();
+        Assert.Single(await db.CreatedRequisitions.AsNoTracking().ToListAsync());
+    }
+
+    /// <summary>
+    /// A turn that claims a creation without touching the write path is falsifiable
+    /// from the report alone — the write-path analogue of the fabricated retrieval
+    /// the live gate caught on the read path, where a turn narrated "Observation:
+    /// Executed the search" and called no tool.
+    /// </summary>
+    /// <remarks>
+    /// A fake model will not narrate, so the behaviour itself is untestable in
+    /// process; what is testable is that the evidence would be there. Before
+    /// <see cref="RagQueryReport.WriteAttempted"/> this turn was byte-identical in
+    /// the report to one that legitimately had nothing to write, and the only way to
+    /// refute the claim was to query the table and hope the row was identifiable.
+    /// </remarks>
+    [Fact]
+    public async Task A_turn_claiming_a_creation_without_a_write_attempt_is_falsifiable()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.Answer = "Your purchase requisition has been created successfully.";
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "yes, go ahead and create the requisition",
+        });
+
+        var report = await ReadLastReportAsync(ReportsDir);
+
+        // The claim, and the refutation, both live in the report.
+        Assert.Contains("has been created", response.Answer, StringComparison.OrdinalIgnoreCase);
+        Assert.False(report.WriteAttempted);
+        Assert.False(report.RequisitionPersisted);
+        Assert.Empty(report.ToolCalls);
     }
 
     /// <summary>
@@ -329,6 +446,7 @@ public class RagObservabilityReportTests : IAsyncLifetime
         Assert.Equal(string.Empty, report.Answer);
         Assert.Equal(0, report.RetrievedCount);
         Assert.False(report.RetrievalAttempted);
+        Assert.False(report.WriteAttempted);
 
         // The retrieval count is zero here for the same reason it is zero on a
         // genuine no-context turn, which is exactly why the flag needed the answer

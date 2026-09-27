@@ -214,7 +214,7 @@ public class ToolSchemaTests : IAsyncLifetime
 
         // Six valid fields for a registered combination, but no draft and no
         // confirmation — the exact shape the model used before this change.
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create());
+        RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, RequisitionFlow.Create());
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -243,8 +243,11 @@ public class ToolSchemaTests : IAsyncLifetime
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
         // Drafted but the user never said yes.
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Draft());
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create());
+        RequisitionFlow.OnCreationAgent(
+            chatClient,
+            scope.ServiceProvider,
+            RequisitionFlow.Draft(),
+            RequisitionFlow.Create());
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -269,9 +272,12 @@ public class ToolSchemaTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Draft());
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Confirm("no, the quantity is wrong"));
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create());
+        RequisitionFlow.OnCreationAgent(
+            chatClient,
+            scope.ServiceProvider,
+            RequisitionFlow.Draft(),
+            RequisitionFlow.Confirm("no, the quantity is wrong"),
+            RequisitionFlow.Create());
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -295,10 +301,10 @@ public class ToolSchemaTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        RequisitionFlow.ScriptConfirmedDraft(chatClient.ScriptedToolCalls);
+        RequisitionFlow.ScriptConfirmedDraft(chatClient, scope.ServiceProvider);
 
         // The model drafts quantity 3, then tries to persist quantity 99.
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create(quantity: 99m));
+        chatClient.ScriptFor(RequisitionFlow.CreationAgentKey, RequisitionFlow.Create(quantity: 99m));
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -325,7 +331,8 @@ public class ToolSchemaTests : IAsyncLifetime
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
         RequisitionFlow.ScriptConfirmedCreation(
-            chatClient.ScriptedToolCalls,
+            chatClient,
+            scope.ServiceProvider,
             callIdSuffix: "first");
 
         await chat.AnswerAsync(new ChatRequest
@@ -343,7 +350,7 @@ public class ToolSchemaTests : IAsyncLifetime
         // The draft was cleared on success, so a second call has nothing to
         // confirm and must be refused.
         chatClient.ResetScript();
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create());
+        RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, RequisitionFlow.Create());
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -371,7 +378,7 @@ public class ToolSchemaTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Draft());
+        RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, RequisitionFlow.Draft());
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -397,7 +404,7 @@ public class ToolSchemaTests : IAsyncLifetime
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
             var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-            RequisitionFlow.ScriptConfirmedCreation(chatClient.ScriptedToolCalls);
+            RequisitionFlow.ScriptConfirmedCreation(chatClient, scope.ServiceProvider);
 
             await chat.AnswerAsync(new ChatRequest
             {
@@ -418,7 +425,7 @@ public class ToolSchemaTests : IAsyncLifetime
             var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
             var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
-            chatClient.ScriptedToolCalls.Add(RequisitionFlow.Create());
+            RequisitionFlow.OnCreationAgent(chatClient, scope.ServiceProvider, RequisitionFlow.Create());
 
             await chat.AnswerAsync(new ChatRequest
             {

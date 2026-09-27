@@ -88,7 +88,8 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
         RequisitionFlow.ScriptConfirmedCreation(
-            chatClient.ScriptedToolCalls,
+            chatClient,
+            scope.ServiceProvider,
             supplierCode: "SUP000002",
             item: "ITM0002",
             description: "Ball bearings for maintenance.");
@@ -113,7 +114,8 @@ public class ItemSupplierCombinationTests : IAsyncLifetime
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
         RequisitionFlow.ScriptConfirmedCreation(
-            chatClient.ScriptedToolCalls,
+            chatClient,
+            scope.ServiceProvider,
             description: "Hydraulic pump refill.",
             quantity: 2m,
             date: "2026-10-02");

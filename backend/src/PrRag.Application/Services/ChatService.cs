@@ -52,12 +52,20 @@ public sealed class ChatService : IChatService
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
         var state = _sessionStore.GetOrCreate(sessionId);
+
+        // The turn context is established before the session is created, not
+        // after: the run picks its entry point from the session state, so the
+        // state has to be readable by the time the graph is composed. A staged
+        // draft therefore sends this turn to the creation agent rather than the
+        // orchestrator.
+        _turnContext.Begin(state, sessionId, topK, minSimilarity);
+
         var session = await _sessionStore.BeginTurnAsync(
             sessionId,
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
-        _turnContext.Begin(session, state, sessionId, topK, minSimilarity);
+        _turnContext.AttachSession(session);
 
         var messages = BuildTurnMessages(state, request.Question);
         var response = await _runService.RunAsync(messages, session, cancellationToken);
@@ -95,12 +103,20 @@ public sealed class ChatService : IChatService
         var minSimilarity = minSimilarityFromRequest ? request.MinSimilarity : _ragSettings.MinSimilarity;
 
         var state = _sessionStore.GetOrCreate(sessionId);
+
+        // The turn context is established before the session is created, not
+        // after: the run picks its entry point from the session state, so the
+        // state has to be readable by the time the graph is composed. A staged
+        // draft therefore sends this turn to the creation agent rather than the
+        // orchestrator.
+        _turnContext.Begin(state, sessionId, topK, minSimilarity);
+
         var session = await _sessionStore.BeginTurnAsync(
             sessionId,
             () => _runService.CreateSessionAsync(cancellationToken),
             cancellationToken);
 
-        _turnContext.Begin(session, state, sessionId, topK, minSimilarity);
+        _turnContext.AttachSession(session);
 
         var messages = BuildTurnMessages(state, request.Question);
         var latestText = new System.Text.StringBuilder();
@@ -260,7 +276,21 @@ public sealed class ChatService : IChatService
             UsedNoContextFallback = _turnContext.RetrievedItems.Count == 0
                 && !string.IsNullOrWhiteSpace(answer),
 
+            // The two routing facts, recorded by the graph rather than derived here:
+            // the entry point is deterministic application state, and a handoff is a
+            // workflow edge that contributes nothing to ToolCalls, so without these
+            // "the entry agent answered a request it should have routed" and "it
+            // routed and the specialist gave a bad answer" are the same report.
+            EntryAgent = _turnContext.EntryAgent,
+            Handoffs = _turnContext.Handoffs,
+
             RetrievalAttempted = _turnContext.ToolCalls.Any(t => ToolNames.ReadOnly.Contains(t.Name)),
+
+            // The write-path mirror, from the same list and the same reason: the
+            // three write facts below are outcomes, so a refused create_requisition
+            // and a turn that never called one look identical without this.
+            WriteAttempted = _turnContext.ToolCalls.Any(t => ToolNames.Writes.Contains(t.Name)),
+
             RewrittenQuery = _turnContext.RewrittenQuery,
             SkillId = skillId,
             SkillName = skillId,

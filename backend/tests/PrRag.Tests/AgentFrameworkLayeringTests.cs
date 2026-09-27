@@ -1,4 +1,5 @@
 using System.Reflection;
+using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
 using PrRag.Application.Domain;
 using PrRag.Application.Services.Agents;
@@ -317,34 +318,140 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
                 g => g.SelectMany(s => s.Tools).Select(t => t.Name).ToList(),
                 StringComparer.Ordinal);
 
-        Assert.Equal(2, byAgent.Count);
+        Assert.Equal(3, byAgent.Count);
 
-        // The participant holds the read-only capability and nothing else.
         var retrieval = byAgent[AgentIds.Retrieval];
+        var creation = byAgent[AgentIds.Creation];
+
+        // The read capability owns the three read tools and nothing else, and the
+        // write capability the three write tools and nothing else. Asserting both
+        // against ToolNames' read and write sets is what keeps the two from
+        // quietly converging on a shared tool.
         Assert.Equal(
-            new[] { ToolNames.SearchByCodes, ToolNames.SearchSemantic, ToolNames.GetSuppliersByItem }
-                .OrderBy(n => n, StringComparer.Ordinal),
+            ToolNames.ReadOnly.OrderBy(n => n, StringComparer.Ordinal),
             retrieval.OrderBy(n => n, StringComparer.Ordinal));
-
-        // The orchestrator holds the four it still owns: the three write tools
-        // and skill activation. It must hold no read tool, or a creation turn
-        // could retrieve instead of drafting.
-        var orchestrator = byAgent[AgentIds.Orchestrator];
         Assert.Equal(
-            new[]
-            {
-                ToolNames.ActivateSkill,
-                ToolNames.CreateRequisitionDraft,
-                ToolNames.ConfirmRequisitionDraft,
-                ToolNames.CreateRequisition,
-            }.OrderBy(n => n, StringComparer.Ordinal),
-            orchestrator.OrderBy(n => n, StringComparer.Ordinal));
+            ToolNames.Writes.OrderBy(n => n, StringComparer.Ordinal),
+            creation.OrderBy(n => n, StringComparer.Ordinal));
 
-        // Exactly the seven wire names, once each, across the two agents.
+        // The orchestrator keeps only what no specialist claims, and that leftover
+        // is written out as a set rather than derived as "whatever is left". A
+        // derived leftover keeps passing while a tool is handed to the
+        // orchestrator, which is the mistake this change exists to prevent: the
+        // write path is unreachable while the agent that fronts the conversation
+        // still holds the tools it can no longer be given.
+        var unextracted = catalog.Specialists
+            .Where(s => !s.IsExtracted)
+            .SelectMany(s => s.Tools.Select(t => t.Name))
+            .OrderBy(n => n, StringComparer.Ordinal)
+            .ToList();
+
+        Assert.Equal(
+            new[] { ToolNames.ActivateSkill }.OrderBy(n => n, StringComparer.Ordinal),
+            unextracted);
+
+        var orchestrator = byAgent[AgentIds.Orchestrator];
+        Assert.Equal(unextracted, orchestrator.OrderBy(n => n, StringComparer.Ordinal));
+
+        // The front door holds no write tool, and neither capability holds the
+        // other's kind. Stated directly so a future tool cannot land on the wrong
+        // agent without one of these four failing.
+        Assert.Empty(ToolNames.Writes.Intersect(orchestrator, StringComparer.Ordinal));
+        Assert.Empty(ToolNames.Writes.Intersect(retrieval, StringComparer.Ordinal));
+        Assert.Empty(ToolNames.ReadOnly.Intersect(creation, StringComparer.Ordinal));
+        Assert.Empty(ToolNames.ReadOnly.Intersect(orchestrator, StringComparer.Ordinal));
+
+        // Exactly the seven wire names, once each, across the three agents.
         var union = byAgent.Values.SelectMany(v => v).ToList();
         Assert.Equal(7, union.Count);
         Assert.Equal(7, union.Distinct(StringComparer.Ordinal).Count());
-        Assert.Empty(orchestrator.Intersect(retrieval, StringComparer.Ordinal));
+    }
+
+    /// <summary>
+    /// A unit's action block is prompt input, so a wire name it does not own is an
+    /// instruction the agent cannot follow.
+    /// </summary>
+    /// <remarks>
+    /// This is the shipped-skill guard applied to the other prompt text that
+    /// ships. The create skill once told the orchestrator to validate codes with
+    /// <c>search_by_codes</c>; after the read tools moved to their own agent the
+    /// step silently never ran and no test failed, because nothing checked prompt
+    /// text against the tools an agent is offered. Asserting the absence per unit
+    /// is the check that was missing.
+    /// </remarks>
+    [Fact]
+    public void No_units_action_block_names_a_tool_it_does_not_own()
+    {
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        foreach (var unit in catalog.Specialists)
+        {
+            var owned = unit.Tools.Select(t => t.Name).ToHashSet(StringComparer.Ordinal);
+            var foreign = catalog.AllTools
+                .Select(t => t.Name)
+                .Where(n => !owned.Contains(n))
+                .Where(n => unit.ActionBlock.Contains(n, StringComparison.Ordinal))
+                .ToList();
+
+            Assert.True(
+                foreign.Count == 0,
+                $"{unit.Id}'s action block names {string.Join(", ", foreign)}, which it is not offered.");
+        }
+    }
+
+    /// <summary>
+    /// The shipped create skill must name calls inside a single capability.
+    /// </summary>
+    /// <remarks>
+    /// This is the shipped-skill bug turned around, and it is why the rule belongs
+    /// next to the catalog rather than in a text fixture. The skill tells its
+    /// reader to call the three write tools. Before the extraction the reader was
+    /// the orchestrator and that was correct; now the reader is still the
+    /// orchestrator, since only the orchestrator can activate a skill, but the
+    /// orchestrator owns none of them. The flow still works, because the activated
+    /// guidance is injected at run level and so reaches the creation agent too — but
+    /// nothing in the text says that, and the orchestrator's own handoff rule is what
+    /// keeps the turn moving.
+    /// <para>
+    /// A single-owner rule catches both directions of this. It fails if a skill
+    /// straddles two units, which is the state the retrieval split left the create
+    /// skill in when it still told the orchestrator to validate codes with
+    /// <c>search_by_codes</c> — the model would have to hand off mid-skill with
+    /// nothing in the skill telling it to. And it fails if the write tools ever move
+    /// off the creation agent again, which would break the flow as quietly as the
+    /// original defect and, unlike the original, on a path that writes.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void The_create_skill_instructs_calls_only_within_one_capability()
+    {
+        var text = File.ReadAllText(
+            Path.Combine(RepoFiles.SkillsDir, "create-purchase-requisition.md"));
+
+        using var scope = _provider!.CreateScope();
+        var catalog = scope.ServiceProvider.GetRequiredService<ISpecialistCatalog>();
+
+        var instructed = catalog.AllTools
+            .Select(t => t.Name)
+            .Where(n => Regex.IsMatch(text, $@"(?i)\bcall(?:ing|s)?\s+`?{Regex.Escape(n)}"))
+            .ToList();
+
+        Assert.NotEmpty(instructed);
+
+        var owners = catalog.Specialists
+            .Where(unit => unit.Tools.Any(t => instructed.Contains(t.Name, StringComparer.Ordinal)))
+            .Select(unit => unit.Id)
+            .Distinct(StringComparer.Ordinal)
+            .ToList();
+
+        Assert.True(
+            owners.Count == 1,
+            $"data/skills/create-purchase-requisition.md tells the agent to call {string.Join(", ", instructed)}, "
+            + $"which are owned by {owners.Count} capabilities ({string.Join(", ", owners)}). One skill must be "
+            + "followable by one agent, or the model has to hand off mid-skill with nothing telling it to.");
+
+        Assert.Equal(AgentIds.Creation, catalog.Specialists.Single(u => u.Id == owners[0]).AgentSlug);
     }
 
     /// <summary>
@@ -374,13 +481,20 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
 
         // The slug is the stable constant, not something derived from the label.
         var extracted = catalog.Specialists.Where(s => s.IsExtracted).ToList();
-        Assert.Equal(new[] { AgentIds.Retrieval }, extracted.Select(s => s.AgentSlug));
+        Assert.Equal(
+            new[] { AgentIds.Retrieval, AgentIds.Creation },
+            extracted.Select(s => s.AgentSlug));
         Assert.All(extracted, s => Assert.NotEqual(s.DisplayName, s.AgentSlug));
 
         // Renaming the label leaves the slug, and therefore routing, untouched.
-        var renamed = extracted[0] with { DisplayName = "Renamed for a demo" };
-        Assert.Equal(extracted[0].AgentSlug, renamed.AgentSlug);
-        Assert.NotEqual(extracted[0].DisplayName, renamed.DisplayName);
+        // Checked for every extracted unit: the claim is that no rename can move
+        // one, so a single representative proves less than the rule does.
+        foreach (var unit in extracted)
+        {
+            var renamed = unit with { DisplayName = "Renamed for a demo" };
+            Assert.Equal(unit.AgentSlug, renamed.AgentSlug);
+            Assert.NotEqual(unit.DisplayName, renamed.DisplayName);
+        }
     }
 
     /// <summary>
@@ -435,7 +549,7 @@ public class AgentFrameworkLayeringTests : IAsyncLifetime
         var bound = units.Where(u => u.IsExtracted).Select(u => u.AgentSlug!).ToHashSet();
         var unclaimedButReserved = claimed.Where(slug => !bound.Contains(slug)).ToList();
         Assert.Equal(
-            new[] { AgentIds.Creation, AgentIds.SkillActivation }.OrderBy(s => s, StringComparer.Ordinal),
-            unclaimedButReserved.OrderBy(s => s, StringComparer.Ordinal));
+            new[] { AgentIds.SkillActivation },
+            unclaimedButReserved);
     }
 }

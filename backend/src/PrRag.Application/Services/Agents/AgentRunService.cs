@@ -17,31 +17,63 @@ namespace PrRag.Application.Services.Agents;
 /// and left <see cref="IAgentRunService"/>, <c>ChatService</c>, the endpoints,
 /// the streaming path, and the session store untouched.
 /// </para>
+///
+/// <para>
+/// Composition is deferred to the first use and happens exactly once per request,
+/// not once per construction. The entry point depends on the session state
+/// (a staged draft sends the turn to the creation agent), and the state arrives
+/// on <see cref="AgentTurnContext"/> during the turn, after this object is built.
+/// Composing in the constructor would therefore read a null state and always
+/// build the orchestrator-entry graph — a defect that would look correct on
+/// every turn except the one the write path depends on.
+/// </para>
 /// </summary>
 public sealed class AgentRunService : IAgentRunService
 {
-    private readonly ComposedAgentGraph _graph;
+    private readonly AgentGraphComposer _composer;
+    private readonly IChatClient _chatClient;
+    private readonly ISkillService _skillService;
+    private readonly ISpecialistCatalog _catalog;
+    private readonly AgentTurnContext _turnContext;
+    private ComposedAgentGraph? _graph;
 
-    public AgentRunService(AgentGraphComposer composer, IChatClient chatClient, ISkillService skillService, ISpecialistCatalog catalog)
+    public AgentRunService(
+        AgentGraphComposer composer,
+        IChatClient chatClient,
+        ISkillService skillService,
+        ISpecialistCatalog catalog,
+        AgentTurnContext turnContext)
     {
-        _graph = composer.Compose(chatClient, skillService, catalog);
+        _composer = composer;
+        _chatClient = chatClient;
+        _skillService = skillService;
+        _catalog = catalog;
+        _turnContext = turnContext;
     }
 
-    /// <summary>The composed graph, for the per-agent assertions and routing diagnostics.</summary>
-    public ComposedAgentGraph Graph => _graph;
+    /// <summary>
+    /// The composed graph for this request, composed on first access so the entry
+    /// point can be resolved from the turn's state. For per-agent assertions and
+    /// routing diagnostics.
+    /// </summary>
+    public ComposedAgentGraph Graph => _graph ??= _composer.Compose(
+        _chatClient,
+        _skillService,
+        _catalog,
+        AgentGraphComposer.ResolveEntryPoint(_turnContext.State));
 
     public ValueTask<AgentSession> CreateSessionAsync(CancellationToken cancellationToken = default)
-        => _graph.Agent.CreateSessionAsync(cancellationToken);
+        => Graph.Agent.CreateSessionAsync(cancellationToken);
 
     public Task<AgentResponse> RunAsync(
         IList<ChatMessage> messages,
         AgentSession session,
         CancellationToken cancellationToken = default)
-        => _graph.Agent.RunAsync(messages, session, cancellationToken: cancellationToken);
+        => Graph.Agent.RunAsync(messages, session, cancellationToken: cancellationToken);
 
     public IAsyncEnumerable<AgentResponseUpdate> RunStreamingAsync(
         IList<ChatMessage> messages,
         AgentSession session,
         CancellationToken cancellationToken = default)
-        => _graph.Agent.RunStreamingAsync(messages, session, cancellationToken: cancellationToken);
+        => Graph.Agent.RunStreamingAsync(messages, session, cancellationToken: cancellationToken);
 }

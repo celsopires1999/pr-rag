@@ -29,12 +29,23 @@ public sealed class RagQueryReport
     public bool SkillActivated { get; set; }
 
     /// <summary>Whether a requisition draft was staged during the turn.</summary>
+    /// <remarks>
+    /// An outcome, not an attempt: staging is refused outright for a field set that
+    /// does not validate, and a turn that called <c>create_requisition_draft</c> and
+    /// got a rejection staged nothing. The attempt is
+    /// <see cref="WriteAttempted"/>.
+    /// </remarks>
     public bool RequisitionDraftStaged { get; set; }
 
     /// <summary>Whether a requisition draft is currently presented to the user.</summary>
     public bool RequisitionDraftPresented { get; set; }
 
     /// <summary>Whether a requisition draft was confirmed by the user.</summary>
+    /// <remarks>
+    /// An outcome for the same reason as <see cref="RequisitionDraftStaged"/>: a
+    /// declined or premature <c>confirm_requisition_draft</c> call is an attempt that
+    /// recorded nothing.
+    /// </remarks>
     public bool RequisitionDraftConfirmed { get; set; }
 
     /// <summary>
@@ -55,6 +66,36 @@ public sealed class RagQueryReport
     public bool UsedNoContextFallback { get; set; }
 
     /// <summary>
+    /// The capability slug the turn entered at: the orchestrator, or the creation
+    /// capability when a draft was awaiting confirmation.
+    /// </summary>
+    /// <remarks>
+    /// The entry point moved from being always-the-orchestrator to being a
+    /// function of session state, and the report was the wrong shape for that: an
+    /// operator reading a bad answer could not tell which agent produced it. The
+    /// entry slug is deterministic application state, so unlike the answer it
+    /// cannot be wrong, which makes it the first thing to check when a turn goes
+    /// sideways.
+    /// </remarks>
+    public string? EntryAgent { get; set; }
+
+    /// <summary>
+    /// The handoffs the turn made, in call order. Empty means no agent handed the
+    /// turn on.
+    /// </summary>
+    /// <remarks>
+    /// A handoff is a workflow edge, not an application tool, so it contributes no
+    /// entry to <see cref="ToolCalls"/>. That made two opposite failures look
+    /// identical in this report: an entry agent that answered a request it should
+    /// have routed, and one that routed correctly to a specialist which then gave a
+    /// bad answer. They are distinguishable only by the pair of slugs recorded
+    /// here, which is why the same reasoning that added
+    /// <see cref="RetrievalAttempted"/> and <see cref="WriteAttempted"/> applies to
+    /// routing.
+    /// </remarks>
+    public List<RagHandoff> Handoffs { get; set; } = new();
+
+    /// <summary>
     /// Whether a read-only tool actually ran this turn.
     /// </summary>
     /// <remarks>
@@ -72,6 +113,32 @@ public sealed class RagQueryReport
     /// </para>
     /// </remarks>
     public bool RetrievalAttempted { get; set; }
+
+    /// <summary>
+    /// Whether a tool on the write path actually ran this turn.
+    /// </summary>
+    /// <remarks>
+    /// The write-side mirror of <see cref="RetrievalAttempted"/>, and it exists for
+    /// the same reason. Every other write fact in this report is an outcome:
+    /// <see cref="RequisitionDraftStaged"/>,
+    /// <see cref="RequisitionDraftConfirmed"/>, and
+    /// <see cref="RequisitionPersisted"/> are all false both when a write was
+    /// refused and when no write was attempted. A model that calls
+    /// <c>create_requisition</c> with no confirmed draft — the case the gate exists
+    /// to hold — is therefore indistinguishable in this report from a turn that
+    /// never tried, and so is a turn whose answer claims a requisition was created.
+    /// <para>
+    /// With this flag the claim is checkable without querying the table: an answer
+    /// asserting a creation alongside <c>WriteAttempted == false</c> is a fabricated
+    /// completion, which is the write-path analogue of the "Observation: Executed the
+    /// search" defect that <see cref="RetrievalAttempted"/> was added for. It is
+    /// derived from the tool call list rather than from the session's draft state,
+    /// because a refused write leaves the draft state exactly as it was — the same
+    /// reading would then report a turn that tried and was stopped identically to
+    /// one that never spoke to the write path.
+    /// </para>
+    /// </remarks>
+    public bool WriteAttempted { get; set; }
 }
 
 public sealed class RagRetrievedItem
@@ -108,4 +175,14 @@ public sealed class RagToolCall
 
     public IReadOnlyDictionary<string, object?> Arguments { get; set; } =
         new Dictionary<string, object?>();
+}
+
+/// <summary>One capability handing a turn to another.</summary>
+public sealed class RagHandoff
+{
+    /// <summary>The capability slug that handed the turn on.</summary>
+    public string From { get; set; } = string.Empty;
+
+    /// <summary>The capability slug that received the turn.</summary>
+    public string To { get; set; } = string.Empty;
 }

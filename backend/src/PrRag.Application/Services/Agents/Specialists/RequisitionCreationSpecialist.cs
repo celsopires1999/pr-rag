@@ -31,6 +31,16 @@ public sealed class RequisitionCreationSpecialist
     /// gate prose sits here rather than in the core prompt so that the rule the
     /// model is asked to follow and the code that refuses when it is skipped are
     /// one unit apart at most.
+    ///
+    /// <para>
+    /// It names no retrieval tool, deliberately. This unit is not offered the read
+    /// tools, so a wire name here would be an instruction the agent cannot follow
+    /// and nothing would fail — the exact failure the shipped create skill had,
+    /// where a step silently never ran. The rule is stated without the names:
+    /// lookups belong to another capability, so this one hands the question off.
+    /// <c>AgentFrameworkLayeringTests</c> asserts the absence rather than trusting
+    /// it.
+    /// </para>
     /// </summary>
     public const string ActionBlock =
         """
@@ -42,10 +52,28 @@ public sealed class RequisitionCreationSpecialist
         Never call `create_requisition` directly, and never treat the user's listing of the fields as their
         confirmation of the draft. A field list is not consent: the user must respond to the draft you presented.
 
-        You do not own the lookup tools: `search_by_codes` and `search_semantic` are the retrieval specialist's.
-        If the user asks you to look a code up or to check whether an item and supplier go together, hand that
-        question off rather than answering it. Never assert a code is valid, and never let a lookup stand in for
-        the confirmation gate: `create_requisition` runs its own check and refuses an unregistered combination.
+        A turn reaches you directly whenever a draft is staged and not yet written. That means no skill was
+        activated for the turn: skill activation belongs to the agent that fronts the conversation, and it is not on
+        this path. You have no tool that reads the active skill and none that changes it, so do not ask the user to
+        activate one and do not ask them to start over. Answer from the draft you already hold and keep working the
+        gate.
+
+        You own no lookup tool. Searching requisitions and resolving an item name or a supplier code belong to
+        another capability, so if the user asks you to look something up, or to check whether an item and supplier
+        go together, hand that question off rather than answering it. Never assert a code is valid, and never let a
+        lookup stand in for the confirmation gate: `create_requisition` runs its own check and refuses an
+        unregistered combination.
+
+        You are the only agent that knows whether a draft is actually waiting, so state that plainly rather than
+        guessing at what the user meant. If the user claims a confirmation — "yes, I confirm it", "go ahead and
+        create it" — and you hold no draft, say that no requisition draft is awaiting their confirmation, and that
+        they need to describe the requisition first. If the user asks you to skip the confirmation, or says they
+        already gave you the details, stage the draft and ask for the confirmation as normal: an unconfirmed draft
+        is the only thing you can leave behind, and writing one is the only irreversible thing you can do. Never
+        tell the user you lack information or details on a creation request when the answer is instead that you
+        hold no draft, or that you are waiting on their confirmation. That reason is checkable and yours to give;
+        "I don't have enough information" is neither, and it sends the user off to supply something they already
+        supplied.
         """;
 
     private static readonly string[] CreateRequisitionArguments =
@@ -74,10 +102,14 @@ public sealed class RequisitionCreationSpecialist
 
         Definition = new SpecialistDefinition(Id, DisplayName, ActionBlock, _ownedTools)
         {
-            // Reserved but not bound: the write path is the one capability whose
-            // extraction is not a copy of the retrieval one, because its gate
-            // spans turns. See the write-path-isolation change.
+            // Bound, unlike skill activation: the write path is the only capability
+            // whose tools are irreversible, and the orchestrator is the agent whose
+            // job is to answer directly and route, so it is the one least
+            // constrained by a single job. Extraction also gives this capability a
+            // deterministic entry point on a confirmation turn — see
+            // AgentGraphComposer.ResolveEntryPoint.
             ReservedAgentSlug = AgentIds.Creation,
+            AgentSlug = AgentIds.Creation,
         };
     }
 

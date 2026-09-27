@@ -151,7 +151,7 @@ public class SkillFrameworkTests : IAsyncLifetime
         // participant as a run-level system message even though the participant's
         // own instructions carry no manifest — only the orchestrator holds
         // activate_skill, so only the orchestrator can be told what exists.
-        chatClient.AutoHandoff = true;
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
         chatClient.ScriptFor(ToolNames.SearchByCodes, CodesCall(new[] { "SUP000001" }));
 
         var response = await chat.AnswerAsync(new ChatRequest
@@ -238,9 +238,16 @@ public class SkillFrameworkTests : IAsyncLifetime
         var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
+        // The orchestrator activates the skill, then hands off; the write tools
+        // live on the creation agent, so the creation sequence is scripted there.
+        //
+        // The shipped skill also tells the agent to look the codes up first, and
+        // that step now needs a handoff of its own — a turn reaches one specialist
+        // and returns, so a lookup and a write are two turns. It is left out here
+        // because it is not what this test is about; the lookup's own path is
+        // covered by An_active_skill_survives_a_turn_that_is_routed_to_a_participant.
         chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
-        chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
-        RequisitionFlow.ScriptConfirmedCreation(chatClient.ScriptedToolCalls);
+        RequisitionFlow.ScriptConfirmedCreation(chatClient, scope.ServiceProvider);
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -274,8 +281,7 @@ public class SkillFrameworkTests : IAsyncLifetime
         var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
 
         chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
-        chatClient.ScriptedToolCalls.Add(CodesCall(new[] { "SUP000001" }));
-        RequisitionFlow.ScriptConfirmedCreation(chatClient.ScriptedToolCalls);
+        RequisitionFlow.ScriptConfirmedCreation(chatClient, scope.ServiceProvider);
 
         await chat.AnswerAsync(new ChatRequest
         {
@@ -301,9 +307,10 @@ public class SkillFrameworkTests : IAsyncLifetime
         // Field validation happens when the draft is staged: an invalid draft
         // can never reach the confirmed state, so create_requisition cannot
         // later persist it.
-        chatClient.ScriptedToolCalls.Add(RequisitionFlow.Draft(
-            supplierCode: string.Empty,
-            date: "not-a-date"));
+        RequisitionFlow.OnCreationAgent(
+            chatClient,
+            scope.ServiceProvider,
+            RequisitionFlow.Draft(supplierCode: string.Empty, date: "not-a-date"));
 
         var response = await chat.AnswerAsync(new ChatRequest
         {
@@ -328,7 +335,8 @@ public class SkillFrameworkTests : IAsyncLifetime
         // The user confirmed this draft, so the confirmation gate is satisfied.
         // The combination guard is independent of it and must still refuse.
         RequisitionFlow.ScriptConfirmedCreation(
-            chatClient.ScriptedToolCalls,
+            chatClient,
+            scope.ServiceProvider,
             supplierCode: "SUP000002",
             item: "ITM9999");
 

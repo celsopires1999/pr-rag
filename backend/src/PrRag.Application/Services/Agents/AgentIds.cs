@@ -31,9 +31,16 @@ namespace PrRag.Application.Services.Agents;
 public static class AgentIds
 {
     /// <summary>
-    /// The entry point of the graph: it answers directly for the capabilities it
+    /// The entry point of the graph. It answers directly for the capabilities it
     /// still holds and hands off the ones extracted to their own agents.
     /// </summary>
+    /// <remarks>
+    /// Not the entry point of <em>every</em> turn. A turn on which a requisition
+    /// draft is awaiting confirmation enters at <see cref="Creation"/> instead, so
+    /// reaching the tool that unlocks the write does not depend on the model
+    /// re-deriving that a draft is pending — see
+    /// <c>AgentGraphComposer.ResolveEntryPoint</c>.
+    /// </remarks>
     public const string Orchestrator = "prrag.orchestrator";
 
     /// <summary>
@@ -44,9 +51,8 @@ public static class AgentIds
 
     /// <summary>
     /// Claimed by <see cref="Specialists.RequisitionCreationSpecialist"/>, whose
-    /// tools remain on the orchestrator until the write path is extracted. The
-    /// slug is already fixed, so records written before and after the extraction
-    /// correlate.
+    /// three write tools are bound to it. The slug was fixed before the
+    /// extraction, so records written before and after correlate.
     /// </summary>
     public const string Creation = "prrag.creation";
 

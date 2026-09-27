@@ -14,11 +14,20 @@ namespace PrRag.Application.Services.Agents;
 /// </para>
 /// </summary>
 /// <param name="Agent">The graph presented as one agent.</param>
-/// <param name="Orchestrator">The graph's entry point.</param>
-/// <param name="Participants">Specialist agents by their stable slug.</param>
+/// <param name="EntryAgent">
+/// The agent the turn started at. Not always the orchestrator — see
+/// <see cref="AgentGraphComposer.ResolveEntryPoint"/>.
+/// </param>
+/// <param name="EntryPoint">
+/// The stable slug of <paramref name="EntryAgent"/>. Kept beside the agent
+/// because the whole point is that the entry varies per turn, and an assertion
+/// that reads the agent's display name cannot see the difference.
+/// </param>
+/// <param name="Specialists">Every specialist agent by its stable slug, entry included.</param>
 /// <param name="Workflow">The underlying graph.</param>
 public sealed record ComposedAgentGraph(
     AIAgent Agent,
-    ChatClientAgent Orchestrator,
-    IReadOnlyDictionary<string, ChatClientAgent> Participants,
+    ChatClientAgent EntryAgent,
+    string EntryPoint,
+    IReadOnlyDictionary<string, ChatClientAgent> Specialists,
     Workflow Workflow);
