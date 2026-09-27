@@ -240,6 +240,54 @@ public class AgentGraphTopologyTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// Which agent authors the answer once a handoff has moved the turn.
+    ///
+    /// <para>
+    /// This is not a curiosity. A handoff turn produces one answer from a chain of
+    /// agents, and a report that records <c>EntryAgent</c> and <c>Handoffs</c> does
+    /// not say which agent produced that text. So "the entry agent answered and
+    /// never handed off" and "the entry agent handed off and the target then
+    /// answered as if no draft existed" are the same report — the exact pair of
+    /// opposite failures the handoff fields were added to separate, still not
+    /// separated.
+    /// </para>
+    ///
+    /// <para>
+    /// The claim being pinned is the target's: the specialist holds the capability,
+    /// the orchestrator holds no write tool, and the answer that comes back is the
+    /// one the target composed. A test asserting that is what lets a live report be
+    /// read: a bad answer on a turn whose report shows a handoff is the target's
+    /// answer, so the fix belongs to the target's instructions.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task The_answer_to_a_handed_off_turn_is_the_targets_own_text()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        const string OrchestratorText = "ORCHESTRATOR TEXT";
+        const string CreationText = "CREATION TEXT";
+
+        // Distinguishable per agent, so whichever agent produces the surviving text
+        // is identifiable. A single shared Answer could not tell them apart.
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = OrchestratorText;
+        chatClient.AnswerByAgent[ToolNames.CreateRequisitionDraft] = CreationText;
+
+        chatClient.HandOffToCreation(scope.ServiceProvider);
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a purchase requisition for ITM0001, all details supplied, skip the confirmation",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        Assert.Equal(CreationText, response.Answer);
+    }
+
+    /// <summary>
     /// A finished participant returns control: the next turn is served by the
     /// orchestrator again, and the orchestrator's tool set is what is on offer.
     /// Without this, a graph that trapped the conversation in the participant
@@ -766,6 +814,13 @@ public class AgentGraphTopologyTests : IAsyncLifetime
     /// report: the front door answered a request it should have routed, or it
     /// routed and the write capability gave a bad answer.
     /// </remarks>
+    /// <remarks>
+    /// The per-scenario halves of the same requirement are
+    /// <see cref="A_turn_the_entry_agent_answers_records_no_handoff"/> and
+    /// <see cref="A_pending_draft_turn_records_the_creation_agent_as_the_entry"/>;
+    /// <see cref="Routed_turns_are_attributable_to_its_entry_agent_and_its_handoffs"/>
+    /// covers what none of them can, which is that the fields belong to one turn.
+    /// </remarks>
     [Fact]
     public async Task A_routed_turn_records_the_handoff_in_the_report()
     {
@@ -791,6 +846,208 @@ public class AgentGraphTopologyTests : IAsyncLifetime
         Assert.Equal(
             new[] { (AgentIds.Orchestrator, AgentIds.Retrieval) },
             report.Handoffs.Select(h => (h.From, h.To)));
+    }
+
+    /// <summary>
+    /// The two routing fields describe <em>one turn</em>, and a report never
+    /// accumulates a conversation's delegations.
+    /// </summary>
+    /// <remarks>
+    /// The per-scenario tests above each read a fresh session, so none of them can
+    /// see a turn inheriting its predecessor's handoffs. That is the one thing the
+    /// <see cref="RagQueryReport.Handoffs"/> list is positioned to get wrong: it
+    /// lives on the turn context, and a list that is appended to rather than reset
+    /// would make an unrouted turn look routed — the exact routing failure the
+    /// field exists to expose, reported as its opposite.
+    /// <para>
+    /// All three turns share one scope on purpose. The context is scoped per
+    /// request, so a fresh scope per turn would hand each one an empty list and the
+    /// test would pass against code that never resets anything. It is
+    /// <see cref="AgentTurnContext.Begin"/> that has to do it, and
+    /// <see cref="HandoffAttributionTests.Beginning_a_turn_discards_the_previous_turns_delegations"/>
+    /// pins the reset itself; this pins that a report written from a reused context
+    /// still describes only the turn that produced it.
+    /// </para>
+    /// <para>
+    /// Sharing a scope also means the second and third turns reuse the first turn's
+    /// composed entry point. That is safe here and nowhere else: no draft is staged
+    /// on any of them, so the entry agent is the orchestrator for all three
+    /// independently of what was composed.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task Routed_turns_are_attributable_to_its_entry_agent_and_its_handoffs()
+    {
+        var sessionId = "per-turn-routing";
+        var reportsDir = Path.Combine(_dataDir, "reports");
+
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        for (var turn = 0; turn < 2; turn++)
+        {
+            chatClient.HandOffToRetrieval(scope.ServiceProvider);
+            chatClient.ToolCall = new FunctionCallContent(
+                $"call_{turn}",
+                ToolNames.SearchByCodes,
+                new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+
+            await chat.AnswerAsync(new ChatRequest
+            {
+                SessionId = sessionId,
+                Question = "what is requisition from supplier SUP000001?",
+                TopK = 5,
+                MinSimilarity = 0,
+            });
+
+            var report = await ReadLastReportAsync(reportsDir);
+            Assert.Equal(AgentIds.Orchestrator, report.EntryAgent);
+            Assert.Equal(
+                new[] { (AgentIds.Orchestrator, AgentIds.Retrieval) },
+                report.Handoffs.Select(h => (h.From, h.To)));
+        }
+
+        // The third turn is served by the entry agent itself. The context has
+        // recorded two delegations by now, so if the list survived the turn
+        // boundary this report would carry two delegations that did not happen on it.
+        chatClient.ResetScript();
+        chatClient.AutoHandoff = false;
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_activate",
+            ToolNames.ActivateSkill,
+            new Dictionary<string, object?> { ["name"] = "create-purchase-requisition" });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "activate the create purchase requisition skill",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var direct = await ReadLastReportAsync(reportsDir);
+        Assert.Equal(AgentIds.Orchestrator, direct.EntryAgent);
+        Assert.Empty(direct.Handoffs);
+    }
+
+    /// <summary>
+    /// The emitting agent is known at the moment the call is observed, so a
+    /// handoff is a pair of capabilities rather than an opaque name.
+    /// </summary>
+    /// <remarks>
+    /// The turn is composed at the creation agent — a draft is pending — and the
+    /// creation agent then hands the turn on to the read capability. If the
+    /// observation were not bound per agent, the recorded source would be
+    /// whichever agent the framework happened to route through, and a specialist's
+    /// delegation would be indistinguishable from the orchestrator's. That is the
+    /// difference between a report that names the capability that misbehaved and
+    /// one that only says something happened.
+    /// </remarks>
+    [Fact]
+    public async Task A_handoff_is_observed_where_the_emitting_agent_is_still_known()
+    {
+        var sessionId = "emitting-agent";
+        var chatClient = _provider!.CreateScope().ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        // Turn 1 stages the draft, which is what makes turn 2 enter at creation.
+        using (var stage = _provider!.CreateScope())
+        {
+            var chat = stage.ServiceProvider.GetRequiredService<IChatService>();
+            RequisitionFlow.OnCreationAgent(
+                chatClient,
+                stage.ServiceProvider,
+                RequisitionFlow.Draft());
+
+            await chat.AnswerAsync(new ChatRequest
+            {
+                SessionId = sessionId,
+                Question = "create a purchase requisition for ITM0001 from SUP000001",
+                TopK = 5,
+                MinSimilarity = 0,
+            });
+        }
+
+        var entryAgent = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Orchestrator, entryAgent.EntryAgent);
+
+        // Turn 2 enters at creation, whose own handoff edge points at the read
+        // capability. The scripted model takes it, so the source recorded is the
+        // entry agent and not the orchestrator.
+        chatClient.ResetScript();
+        chatClient.HandOffToRetrieval(_provider.CreateScope().ServiceProvider);
+
+        using (var scope = _provider!.CreateScope())
+        {
+            var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+            await chat.AnswerAsync(new ChatRequest
+            {
+                SessionId = sessionId,
+                Question = "by the way, which suppliers do you have for ITM0001?",
+                TopK = 5,
+                MinSimilarity = 0,
+            });
+        }
+
+        var delegated = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Creation, delegated.EntryAgent);
+        Assert.Equal(
+            new[] { (AgentIds.Creation, AgentIds.Retrieval) },
+            delegated.Handoffs.Select(h => (h.From, h.To)));
+    }
+
+    /// <summary>
+    /// A target that refuses the turn it was handed is not an absent handoff.
+    /// </summary>
+    /// <remarks>
+    /// The refusal is what makes the observation point load-bearing. A handoff is
+    /// observed on the way out of the chat client, before the framework dispatches
+    /// it, so it is on the record whether or not the target ever runs. Observed
+    /// after dispatch — from a tool handler, say — the refusal would erase it, and
+    /// the turn would be reported as a direct answer by an agent that demonstrably
+    /// delegated: the exact misreading the fields were added to prevent.
+    /// <para>
+    /// The framework completes a run whose chat call threw and surfaces it empty,
+    /// so this turn ends in <see cref="ChatTurnFailedException"/> and its report is
+    /// the only artefact. That is the realistic shape too — a rejected key or an
+    /// outage on the target's turn looks like this.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_handoff_is_recorded_even_when_the_target_refuses_the_turn()
+    {
+        var sessionId = "refused-handoff";
+        var reportsDir = Path.Combine(_dataDir, "reports");
+        var chatClient = _provider!.CreateScope().ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        using (var scope = _provider!.CreateScope())
+        {
+            var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+            var client = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+            client.HandOffToRetrieval(scope.ServiceProvider);
+            client.ThrowAfterHandoff = true;
+
+            await Assert.ThrowsAsync<ChatTurnFailedException>(
+                () => chat.AnswerAsync(new ChatRequest
+                {
+                    SessionId = sessionId,
+                    Question = "what is requisition from supplier SUP000001?",
+                    TopK = 5,
+                    MinSimilarity = 0,
+                }));
+        }
+
+        // The turn produced no answer, and the report says why it is still
+        // diagnosable: the delegation was attempted.
+        var report = await ReadLastReportAsync(reportsDir);
+        Assert.Equal(string.Empty, report.Answer);
+        Assert.Equal(AgentIds.Orchestrator, report.EntryAgent);
+        Assert.Equal(
+            new[] { (AgentIds.Orchestrator, AgentIds.Retrieval) },
+            report.Handoffs.Select(h => (h.From, h.To)));
+
+        chatClient.ThrowAfterHandoff = false;
     }
 
     /// <summary>

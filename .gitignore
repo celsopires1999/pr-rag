@@ -21,3 +21,7 @@ reports/
 .vs/
 .idea/
 *.swp
+
+# Python bytecode from scripts/lib test discovery
+__pycache__/
+*.pyc

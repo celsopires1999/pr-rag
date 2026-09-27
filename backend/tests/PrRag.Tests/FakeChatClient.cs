@@ -44,10 +44,29 @@ public sealed class FakeChatClient : IChatClient
     public Dictionary<string, List<FunctionCallContent>> ScriptedToolCallsByAgent { get; } =
         new(StringComparer.Ordinal);
 
+    /// <summary>
+    /// Per-agent answers, keyed by a tool name only the agent in question is offered,
+    /// for the agent that has nothing left in its tool-call script.
+    ///
+    /// <para>
+    /// <see cref="Answer"/> is one string for the whole run, so it cannot say
+    /// <em>which</em> agent produced the reply once a handoff has moved the turn.
+    /// That is not a cosmetic gap: a turn whose answer came from the agent that
+    /// refused to act reads identically to one where the entry agent answered and
+    /// never handed off, and the two are the exact pair of opposite failures the
+    /// handoff fields were added to separate. Keyed the same way as
+    /// <see cref="ScriptedToolCallsByAgent"/> for the same reason — the tool sets
+    /// are disjoint — so a test can give each participant a distinguishable reply
+    /// and assert on the text that survives.
+    /// </para>
+    /// </summary>
+    public Dictionary<string, string> AnswerByAgent { get; } = new(StringComparer.Ordinal);
+
     private int _toolCallConsumed;
     private int _scriptedIndex;
     private readonly Dictionary<string, int> _agentScriptIndex = new(StringComparer.Ordinal);
     private readonly HashSet<string> _seenResultCallIds = new(StringComparer.Ordinal);
+    private bool _handoffEmitted;
 
     /// <summary>
     /// MAF names the generated handoff tool positionally (<c>handoff_to_1</c>) and
@@ -84,6 +103,22 @@ public sealed class FakeChatClient : IChatClient
     public string? LastHandoffToolName { get; private set; }
 
     /// <summary>
+    /// When set, the first call made <em>after</em> a handoff has been emitted
+    /// throws — a target that refuses the turn it was handed.
+    /// </summary>
+    ///
+    /// <para>
+    /// The framework completes a run whose chat call threw and surfaces it empty
+    /// rather than raising, so a refusal leaves the same shape as a quiet turn:
+    /// <c>200 OK</c> with no answer. The only artefact distinguishing them is the
+    /// report, and only because the handoff was recorded <em>before</em> the target
+    /// was called. Without a seam for the refusal, "the target refused" and "the
+    /// target ran and answered badly" are the same report again — which is the pair
+    /// the handoff fields exist to separate.
+    /// </para>
+    public bool ThrowAfterHandoff { get; set; }
+
+    /// <summary>
     /// Rewinds the script so a later turn of the same session can be scripted
     /// from the start. The client is a singleton shared across scopes, so
     /// <see cref="ScriptedToolCalls"/> alone cannot express "turn 2 does this".
@@ -94,9 +129,15 @@ public sealed class FakeChatClient : IChatClient
         {
             ScriptedToolCalls.Clear();
             ScriptedToolCallsByAgent.Clear();
+            AnswerByAgent.Clear();
             _scriptedIndex = 0;
             _toolCallConsumed = 0;
             _agentScriptIndex.Clear();
+
+            // Part of the script: whether a handoff has been emitted is what
+            // arms ThrowAfterHandoff, and leaving it set from an earlier turn
+            // would make the next turn throw before it ever reached a handoff.
+            _handoffEmitted = false;
         }
     }
 
@@ -273,6 +314,12 @@ public sealed class FakeChatClient : IChatClient
             AllOfferedToolNames.Add(LastOfferedToolNames.ToList());
             AllPrompts.Add(LastPrompt);
             RecordFreshToolResults(snapshot);
+
+            if (ThrowAfterHandoff && _handoffEmitted)
+            {
+                throw new InvalidOperationException(
+                    "FakeChatClient: the handoff target's turn was refused.");
+            }
         }
 
         ChatMessage reply;
@@ -296,7 +343,7 @@ public sealed class FakeChatClient : IChatClient
         }
         else
         {
-            reply = new ChatMessage(ChatRole.Assistant, Answer);
+            reply = new ChatMessage(ChatRole.Assistant, AnswerFor(offered));
         }
 
         return Task.FromResult(new ChatResponse
@@ -308,6 +355,25 @@ public sealed class FakeChatClient : IChatClient
             // the conversation — which is how the history once doubled.
             Messages = EchoRequest ? [.. snapshot, reply] : [reply],
         });
+    }
+
+    /// <summary>
+    /// This agent's own scripted answer when it is offered one of the keys of
+    /// <see cref="AnswerByAgent"/>, otherwise <see cref="Answer"/>.
+    /// </summary>
+    private string AnswerFor(List<string> offeredTools)
+    {
+        var offered = offeredTools.ToHashSet(StringComparer.Ordinal);
+
+        foreach (var key in AnswerByAgent.Keys)
+        {
+            if (offered.Contains(key))
+            {
+                return AnswerByAgent[key];
+            }
+        }
+
+        return Answer;
     }
 
     /// <summary>
@@ -370,6 +436,7 @@ public sealed class FakeChatClient : IChatClient
         }
 
         LastHandoffToolName = handoff;
+        _handoffEmitted = true;
         call = new FunctionCallContent($"handoff_{Guid.NewGuid():N}", handoff, new Dictionary<string, object?>());
         return true;
     }

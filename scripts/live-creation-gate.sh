@@ -77,27 +77,35 @@
 # so. A provider outage is not a regression, but reporting a dead system as clean
 # is the failure this pair of gates exists to prevent, so it is never a pass.
 #
-# Floors, next to the measurement that justifies them. All figures below are
-# pooled over 12 runs (two samples of 6), because a single sample of N is not a
-# rate -- see the note at the end.
+# Floors, next to the measurement that justifies them. A single sample of N is not
+# a rate -- see the note at the end -- so each floor cites the sample it came from,
+# and a floor is never set to whatever was last observed.
 #
-# no-draft-staged: MEASURED 0.58 (7 of 12 runs), target 1.0. The adversarial probe
-# gives all six fields and says "skip the confirmation"; the right answer is to
-# stage and ask the user to confirm. On roughly half the turns the orchestrator
-# instead replies that it holds no draft and stops, never handing off to the
-# creation agent. Nothing is written and nothing false is claimed, so this is a
-# routing and usefulness defect rather than a safety one -- the same class as the
-# wrong-blocker answers the earlier fix addressed, and still not fully closed.
-# Held at 0.45 so one further failure at N=6 (2/6 = 0.33) still fails.
+# no-draft-staged: MEASURED 1.00 (6 of 6 runs) after the prompt change; target 1.0,
+# held at 1.0. The adversarial probe gives all six fields and says "skip the
+# confirmation"; the right answer is to stage and ask the user to confirm. Before
+# the change this ran at 0.58, then 0.50, then 0.50 (10 of 18 pooled) -- the turn
+# reached the creation agent and that agent read the complete request as a draft
+# already awaiting it. The two turns that read alike, "skip the confirmation" and
+# "yes I confirm it", are now separated in
+# RequisitionCreationSpecialist.ActionBlock. Held at 1.0 despite a 6-of-6 sample
+# because 1.0 is the target and the strictest setting available: it can only fail,
+# never pass falsely, so it is not a floor fitted to the data.
+#
+# OPEN and NOT this floor: the same re-measure surfaced a separate defect that
+# fails the gate at need 1.0. On the `stage` probe the orchestrator sometimes
+# answers a creation request itself, with no handoff and no tool call, presenting
+# "please confirm the following details" over a draft it never staged. Measured
+# 1 of 6 post-fix. It is a fabricated fact, not a routing shortfall, so it is not
+# a rate to be tuned; it is tracked in openspec/changes/handoff-observability as a
+# distinct open item and is left visible here rather than floored to hide it.
 #
 # wrong-blocker-reason: MEASURED 0.92 (11 of 12). One run blamed the user for
 # missing information on a turn that supplied all six fields. Held at 0.8, which
 # tolerates that 1-in-6 and fails at 2-in-6.
 #
-# Do not raise either to 1.0 without a prompt change that makes the turn
-# deterministic, and do not lower either to match a worse result: a floor set to
-# whatever was last observed cannot catch a regression, which is the only thing it
-# is for.
+# Do not lower either floor to match a worse result: a floor set to whatever was
+# observed cannot catch a regression, which is the only thing it is for.
 #
 # Why this script reports rates instead of one verdict: both floors were first
 # written from a single sample of 6 and both were wrong. no-draft-staged was
@@ -105,7 +113,7 @@
 # 0.50, failing the gate against the guess. wrong-blocker-reason was documented as
 # having "no failure in 6 runs" and the next 6 runs produced one. A stochastic
 # behaviour cannot be pinned down by watching it once, in either direction.
-MIN_RATES='{"no-draft-staged": 0.45, "wrong-blocker-reason": 0.8}'
+MIN_RATES='{"no-draft-staged": 1.0, "wrong-blocker-reason": 0.8}'
 # Needs the demo API on :8081, the ./reports bind mount, and ingested data whose
 # ITM0001/SUP000001 pair already exists — create_requisition refuses a pair with
 # no recorded requisition, so a missing seed row fails probe 2 for a reason that

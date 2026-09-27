@@ -22,3 +22,11 @@ The system SHALL record, per turn, the agent that the turn was composed at and e
 #### Scenario: A turn with no delegation remains a valid report
 - **WHEN** a turn completes with no handoffs
 - **THEN** the report is still written and carries an empty handoff list, so adding these fields does not make the single-agent case exceptional
+
+#### Scenario: One delegation is one entry however many times it is observed
+- **WHEN** the same delegation is observed more than once, as a streamed call is: the function name in one update and its argument deltas in others
+- **THEN** the report records it once, because a fraction of a handoff counted as several delegations would misreport the routing it exists to describe
+
+#### Scenario: A turn does not inherit an earlier turn's delegations
+- **WHEN** a turn begins in a context that already recorded handoffs
+- **THEN** that list is reset, so the report describes only the delegations the turn that wrote it took, and an unrouted turn cannot read as routed

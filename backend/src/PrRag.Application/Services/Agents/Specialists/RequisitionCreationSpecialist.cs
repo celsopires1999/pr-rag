@@ -41,6 +41,20 @@ public sealed class RequisitionCreationSpecialist
     /// <c>AgentFrameworkLayeringTests</c> asserts the absence rather than trusting
     /// it.
     /// </para>
+    /// <para>
+    /// The closing paragraph separates two turns that read alike — one asking to
+    /// skip the confirmation, one answering a confirmation — because conflating
+    /// them cost roughly half the turns of the adversarial probe. Both name the
+    /// confirmation step, both arrive at an agent holding no draft, and the rule
+    /// for the second shape ("you hold no draft, so say none is awaiting
+    /// confirmation") read as though it answered the first, which is a new request
+    /// that needs a draft staged. The turn carried every field and this agent
+    /// answered that it was waiting on a confirmation nobody had made. It is
+    /// recorded here as a rate because nothing is written and nothing is claimed
+    /// false on two of the three shapes; the third — asserting a draft exists that
+    /// was never staged — is a fabricated fact, and the prompt now names it
+    /// outright.
+    /// </para>
     /// </summary>
     public const string ActionBlock =
         """
@@ -65,15 +79,29 @@ public sealed class RequisitionCreationSpecialist
         unregistered combination.
 
         You are the only agent that knows whether a draft is actually waiting, so state that plainly rather than
-        guessing at what the user meant. If the user claims a confirmation — "yes, I confirm it", "go ahead and
-        create it" — and you hold no draft, say that no requisition draft is awaiting their confirmation, and that
-        they need to describe the requisition first. If the user asks you to skip the confirmation, or says they
-        already gave you the details, stage the draft and ask for the confirmation as normal: an unconfirmed draft
-        is the only thing you can leave behind, and writing one is the only irreversible thing you can do. Never
-        tell the user you lack information or details on a creation request when the answer is instead that you
-        hold no draft, or that you are waiting on their confirmation. That reason is checkable and yours to give;
-        "I don't have enough information" is neither, and it sends the user off to supply something they already
-        supplied.
+        guessing at what the user meant. Establish it from what this turn gives you, not from what its wording
+        implies.
+
+        If this turn carries the requisition's fields — a complete request, or one asking you to skip the
+        confirmation — then no draft is waiting yet, and that is the ordinary case: stage one now with
+        `create_requisition_draft`. A complete request is what stages a draft, so the completeness of the details is
+        the reason to call that tool, never a reason to believe one already exists. "Skip the confirmation", "do not
+        ask me to confirm", and "I already gave you the details" are the user stating a preference about the step
+        that comes after staging. They are not claims that a draft is awaiting them. Stage, present, and ask for the
+        confirmation as normal: an unconfirmed draft is the only thing you can leave behind, and writing one is the
+        only irreversible thing you can do.
+
+        Only one shape is a question about draft state: the user is answering a draft you actually presented — "yes, I
+        confirm it", "go ahead and create it" — and you hold none. Then, and only then, say that no requisition draft
+        is awaiting their confirmation and ask them to describe the requisition. The test is whether the user is
+        answering a draft you presented, not whether their turn happens to contain the word "confirmation": a turn
+        that also carries the six fields is a new request, not a confirmation of nothing.
+
+        Never assert a draft you have not staged, and never present one you have not staged. A claim that a draft
+        exists is a fabricated fact, and it is the one failure on this path that is not safe. Never tell the user you
+        lack information or details on a creation request when the answer is instead that you hold no draft, or that
+        you are waiting on their confirmation. That reason is checkable and yours to give; "I don't have enough
+        information" is neither, and it sends the user off to supply something they already supplied.
         """;
 
     private static readonly string[] CreateRequisitionArguments =
