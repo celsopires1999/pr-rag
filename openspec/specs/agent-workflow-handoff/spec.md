@@ -4,7 +4,7 @@
 TBD - created by archiving change agent-workflow-handoff. Update Purpose after archive.
 ## Requirements
 ### Requirement: Capabilities are bound as agents behind a workflow graph
-The system SHALL bind each extracted capability to its own agent, compose an orchestrator agent that routes between them, and present the resulting graph to callers as a single agent through `WorkflowHostingExtensions.AsAIAgent(...)`, so that the application runs one composed agent regardless of how many participants the graph holds. A capability that owns a write-path tool SHALL NOT remain bound to the orchestrator once the change is delivered, so that the orchestrator can neither call a write tool nor answer a request that requires one.
+The system SHALL bind each extracted capability to its own agent, compose an orchestrator agent that routes between them, and present the resulting graph to callers as a single agent through `WorkflowHostingExtensions.AsAIAgent(...)`, so that the application runs one composed agent regardless of how many participants the graph holds. A capability that owns a write-path tool SHALL NOT remain bound to the orchestrator once the change is delivered, so that the orchestrator can neither call a write tool nor answer a request that requires one. The orchestrator SHALL NOT present work product it did not obtain from a tool call, because holding no write tool prevents an unsound write but does not prevent the orchestrator from describing a write that never happened.
 
 #### Scenario: The graph is presented to callers as one agent
 - **WHEN** the application composes the agent
@@ -21,6 +21,14 @@ The system SHALL bind each extracted capability to its own agent, compose an orc
 #### Scenario: The orchestrator cannot act on a write-path request
 - **WHEN** the orchestrator is composed after write-path isolation is delivered
 - **THEN** the orchestrator holds no write tool, so a request that requires one can only be satisfied by a handoff to the agent that owns it
+
+#### Scenario: Holding no write tool does not license describing one
+- **WHEN** a creation request reaches the orchestrator, which holds no tool that stages a draft
+- **THEN** the orchestrator hands the turn to the agent that owns the write capability rather than presenting a draft summary or asking the user to confirm one, because a draft it cannot stage is one it must not describe as staged
+
+#### Scenario: An answer obtained from a tool is not restated as unearned work product
+- **WHEN** an agent's turn ends with text it produced rather than with a result a tool returned
+- **THEN** that text is not presented to the user as the output of a staged, confirmed, or persisted artifact, because the absence of a tool result is the only evidence that the artifact does not exist
 
 ### Requirement: Handoff is the delegation mechanism
 The system SHALL transfer a conversation between agents by handoff rather than by invoking a specialist as a tool from the orchestrator, so that a specialist which needs to ask the user a question does so directly instead of having its text relayed and paraphrased.

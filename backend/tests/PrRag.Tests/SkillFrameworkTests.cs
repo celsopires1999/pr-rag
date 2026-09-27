@@ -397,6 +397,71 @@ public class SkillFrameworkTests : IAsyncLifetime
         Assert.Equal("create-purchase-requisition", report.SkillName);
     }
 
+    /// <summary>
+    /// The failure the live creation gate found on the <c>stage</c> probe: the
+    /// orchestrator presented a draft it had never staged.
+    ///
+    /// <para>
+    /// The guidance is delivered as a run-level system message, so it reaches every
+    /// agent in the run — including the orchestrator, which is not the agent the
+    /// procedure was written for. Step 4 of the fixture skill is the sharp end of
+    /// that: "Present a structured draft and ask for explicit confirmation" names no
+    /// tool, so an agent holding none can satisfy it in prose and nothing fails.
+    ///
+    /// <para>
+    /// So this asserts the two channels are both present on the same turn, rather
+    /// than that the guidance beat the instructions. The orchestrator's own rule —
+    /// that a step whose tool it lacks is not its to perform — is delivered as
+    /// <c>ChatOptions.Instructions</c>, the guidance as a message, and the defect
+    /// was never one channel replacing the other. It is the model preferring the
+    /// message, because the message is later and more specific. Asserting both
+    /// channels carry their load is what a context-assembly regression would break,
+    /// and it is the part of this that is deterministic.
+    /// </summary>
+    [Fact]
+    public async Task Activated_guidance_does_not_displace_the_orchestrator_instructions()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        // Turn 1 activates, so turn 2 is the turn the guidance is injected on.
+        chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a purchase requisition",
+            TopK = 5,
+            MinSimilarity = 0,
+            SessionId = "guidance-does-not-displace",
+        });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "supplier SUP000001, item ITM0001, quantity 5",
+            TopK = 5,
+            MinSimilarity = 0,
+            SessionId = "guidance-does-not-displace",
+        });
+
+        // The guidance arrived, as a run-level system message.
+        Assert.Contains(
+            chatClient.LastMessages,
+            m => m.Role == ChatRole.System
+                 && m.Text.Contains("Present a structured draft", StringComparison.Ordinal));
+
+        // And the orchestrator's own instructions are still on that same turn,
+        // carrying the rule that step is not the orchestrator's to perform.
+        var orchestratorPrompt = chatClient.PromptForAgent(ToolNames.ActivateSkill);
+        Assert.Contains(
+            "A step you cannot perform is not yours to carry out",
+            orchestratorPrompt,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "Never present an artifact that no tool returned",
+            orchestratorPrompt,
+            StringComparison.Ordinal);
+    }
+
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)
     {
         var path = Path.Combine(_dataDir, "purchase.json");

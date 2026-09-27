@@ -92,13 +92,30 @@
 # because 1.0 is the target and the strictest setting available: it can only fail,
 # never pass falsely, so it is not a floor fitted to the data.
 #
-# OPEN and NOT this floor: the same re-measure surfaced a separate defect that
-# fails the gate at need 1.0. On the `stage` probe the orchestrator sometimes
-# answers a creation request itself, with no handoff and no tool call, presenting
-# "please confirm the following details" over a draft it never staged. Measured
-# 1 of 6 post-fix. It is a fabricated fact, not a routing shortfall, so it is not
-# a rate to be tuned; it is tracked in openspec/changes/handoff-observability as a
-# distinct open item and is left visible here rather than floored to hide it.
+# OPEN and NOT this floor: a separate defect that fails the gate at need 1.0. On
+# the `stage` probe the orchestrator sometimes answers a creation request itself,
+# with no handoff and no tool call, presenting "please confirm the following
+# details" over a draft it never staged. It is a fabricated fact, not a routing
+# shortfall, so it is not a rate to be tuned; it is left visible here rather than
+# floored to hide it.
+#
+# MEASURED 1 in 19 pre-fix turns, not the 1 of 6 first recorded. Pooling three
+# samples of 6 against the unmodified prompt found no further failure, so the
+# original single sample overstated the rate about 3x. The cause is static: the
+# orchestrator holds no tool that stages a draft, and step 5 of the create skill
+# is a six-line field template naming no tool, so an agent can satisfy it in prose
+# out of the user's own input with nothing to fail. SkillActivationSpecialist's
+# ActionBlock now carries the rule that a step whose tool an agent lacks is not its
+# to perform, and that no artifact may be presented that no tool returned.
+#
+# The fix is NOT verified, and this comment is where that belongs. 18 post-fix
+# turns came back clean, which is what a 1-in-19 rate produces with no change at
+# all -- expected failures in 18 turns is 0.95, so roughly half of all unchanged
+# runs also come back clean. One run yields exactly one `stage` sample, so
+# separating 1-in-19 from 0 needs on the order of 100 runs. Read the prompt edit as
+# hardening justified by the prompt structure above, not as a demonstrated
+# improvement. See the Baseline section of
+# openspec/changes/orchestrator-hands-off-creation-requests/design.md.
 #
 # wrong-blocker-reason: MEASURED 0.92 (11 of 12). One run blamed the user for
 # missing information on a turn that supplied all six fields. Held at 0.8, which
