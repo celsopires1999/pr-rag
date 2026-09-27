@@ -18,8 +18,18 @@ internal static class TestDatabase
     /// is the compose "db" service, reachable on host "db", not localhost.
     /// </summary>
     public static string ConnectionStringTemplate =>
-        Environment.GetEnvironmentVariable("TEST_CONNECTION_STRING")
-        ?? (IsInsideDevContainer ? DevContainerHostTemplate : LocalHostTemplate);
+        ResolveTemplate(Environment.GetEnvironmentVariable("TEST_CONNECTION_STRING"), IsInsideDevContainer);
+
+    /// <summary>
+    /// The host-resolution decision, extracted from its inputs so every branch is
+    /// reachable by a test without mutating process-global state. The suite runs
+    /// classes in parallel and twelve of them read TEST_CONNECTION_STRING to build
+    /// their connection strings, so a test that set the variable to reach the
+    /// override branch would break them intermittently for no visible reason.
+    /// </summary>
+    public static string ResolveTemplate(string? testConnectionString, bool isInsideDevContainer) =>
+        testConnectionString
+        ?? (isInsideDevContainer ? DevContainerHostTemplate : LocalHostTemplate);
 
     private static bool IsInsideDevContainer =>
         Environment.GetEnvironmentVariable("REMOTE_CONTAINERS")?.Equals("true", StringComparison.OrdinalIgnoreCase) == true
@@ -52,6 +62,26 @@ internal static class TestDatabase
     }
 
     /// <summary>
+    /// Creates a test database explicitly. The twelve integration classes get theirs
+    /// implicitly, as a side effect of EF's MigrateAsync, which is the wrong mechanism
+    /// when the subject is teardown: it pays for migrations and a seeded schema to
+    /// obtain a catalog whose only purpose is to be dropped. Dropping something that
+    /// was never created asserts nothing, so the create half is explicit and symmetric
+    /// with <see cref="DropDatabaseAsync"/>.
+    /// </summary>
+    public static async Task CreateDatabaseAsync(
+        string dbName,
+        CancellationToken cancellationToken = default)
+    {
+        await using var connection = new NpgsqlConnection(ConnectionStringTemplate);
+        await connection.OpenAsync(cancellationToken);
+
+        await using var command = connection.CreateCommand();
+        command.CommandText = $"CREATE DATABASE {Quote(dbName)}";
+        await command.ExecuteNonQueryAsync(cancellationToken);
+    }
+
+    /// <summary>
     /// Drops a test database created for a test run. Connects through the same
     /// reachable-host template used to create the database (TEST_CONNECTION_STRING,
     /// DevContainer "db", or localhost). Uses DROP DATABASE ... WITH (FORCE) so any
@@ -64,9 +94,10 @@ internal static class TestDatabase
         await using var connection = new NpgsqlConnection(ConnectionStringTemplate);
         await connection.OpenAsync(cancellationToken);
 
-        var quoted = $"\"{dbName.Replace("\"", "\"\"")}\"";
         await using var command = connection.CreateCommand();
-        command.CommandText = $"DROP DATABASE IF EXISTS {quoted} WITH (FORCE)";
+        command.CommandText = $"DROP DATABASE IF EXISTS {Quote(dbName)} WITH (FORCE)";
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
+
+    private static string Quote(string dbName) => $"\"{dbName.Replace("\"", "\"\"")}\"";
 }
