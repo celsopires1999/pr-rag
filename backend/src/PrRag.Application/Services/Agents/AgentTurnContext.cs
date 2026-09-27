@@ -61,6 +61,21 @@ public sealed class AgentTurnContext
     public List<RagHandoff> Handoffs { get; } = new();
 
     /// <summary>
+    /// The capability slug that authored this turn's answer — the last agent to
+    /// emit non-empty text, written once per agent that has something to say.
+    /// Null means no agent produced text.
+    /// </summary>
+    /// <remarks>
+    /// Last write wins, deliberately, and with no coordination between the writing
+    /// parties: every agent's decorator writes this one field on this shared
+    /// object, so the run's own ordering decides the value. A recorded author is
+    /// therefore exactly the last agent that spoke, which is the same thing the
+    /// answer is — see <see cref="RagQueryReport.AnswerAgent"/> for why that is
+    /// the definition rather than an approximation of it.
+    /// </remarks>
+    public string? AnswerAgent { get; private set; }
+
+    /// <summary>
     /// Records a handoff once. Deduplicated because a streamed call arrives as one
     /// update carrying the name and further updates carrying argument deltas, and
     /// counting those separately would report a fraction of a handoff as several.
@@ -72,6 +87,18 @@ public sealed class AgentTurnContext
             Handoffs.Add(new RagHandoff { From = from, To = to });
         }
     }
+
+    /// <summary>
+    /// Attributes the turn's answer to <paramref name="slug"/>, overwriting any
+    /// earlier attribution.
+    /// </summary>
+    /// <remarks>
+    /// A private setter with this method rather than a public property, because the
+    /// only correct way to set the field is with an agent that actually spoke. There
+    /// is no "no agent spoke" value to pass: a caller that has no author leaves the
+    /// field at null, which is the fact the report is meant to carry.
+    /// </remarks>
+    public void RecordAnswerAuthor(string slug) => AnswerAgent = slug;
 
     /// <summary>
     /// Set when a <c>create_requisition</c> call actually persisted a requisition.
@@ -99,6 +126,10 @@ public sealed class AgentTurnContext
         RetrievedItems.Clear();
         ToolCalls.Clear();
         Handoffs.Clear();
+        // Same reason as the list above, and the same hazard: a turn that inherits
+        // its predecessor's author would report an unrouted answer as a delegated
+        // one, which is the specific misreading this field exists to prevent.
+        AnswerAgent = null;
         DraftStaged = false;
         DraftPresented = false;
         DraftConfirmed = false;

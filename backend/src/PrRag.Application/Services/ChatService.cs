@@ -276,13 +276,19 @@ public sealed class ChatService : IChatService
             UsedNoContextFallback = _turnContext.RetrievedItems.Count == 0
                 && !string.IsNullOrWhiteSpace(answer),
 
-            // The two routing facts, recorded by the graph rather than derived here:
-            // the entry point is deterministic application state, and a handoff is a
-            // workflow edge that contributes nothing to ToolCalls, so without these
+            // The three facts that separate an unrouted answer from a badly handled
+            // delegation, recorded by the graph rather than derived here. The entry
+            // point is deterministic application state and a handoff is a workflow
+            // edge that contributes nothing to ToolCalls, so those two alone left
             // "the entry agent answered a request it should have routed" and "it
-            // routed and the specialist gave a bad answer" are the same report.
+            // routed and the specialist gave a bad answer" as one report. The author
+            // is what breaks the tie, and it is copied verbatim — never defaulted to
+            // the entry agent, including on the failure path, because a turn that
+            // produced no text has no author and a defaulted one would read as an
+            // ordinary turn answered in place.
             EntryAgent = _turnContext.EntryAgent,
             Handoffs = _turnContext.Handoffs,
+            AnswerAgent = _turnContext.AnswerAgent,
 
             RetrievalAttempted = _turnContext.ToolCalls.Any(t => ToolNames.ReadOnly.Contains(t.Name)),
 

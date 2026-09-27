@@ -96,6 +96,38 @@ public sealed class RagQueryReport
     public List<RagHandoff> Handoffs { get; set; } = new();
 
     /// <summary>
+    /// The capability slug of the agent that authored the turn's answer: the last
+    /// agent to emit non-empty text. Null means no agent produced text at all.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="EntryAgent"/> and <see cref="Handoffs"/> between them describe a
+    /// <em>chain</em>, and a chain does not say who wrote the sentence the caller
+    /// received. So "the entry agent answered a request it should have routed" and
+    /// "the entry agent routed correctly and the specialist then answered badly"
+    /// were the same report — the pair of opposite failures that cost two changes'
+    /// worth of work before the shipped observability refuted a story built on it.
+    /// </para>
+    /// <para>
+    /// "Last to emit text" is the definition of authorship rather than an
+    /// approximation of it: the run's answer <em>is</em> the last text any agent
+    /// emitted, so text that was produced and then discarded was not the answer
+    /// either. The alternative — the furthest handoff target — is stable when the
+    /// entry agent resumes and speaks, and wrong whenever the target does not
+    /// produce the final text.
+    /// </para>
+    /// <para>
+    /// Null is a real value and is never defaulted to <see cref="EntryAgent"/>. A
+    /// run whose chat client threw completes empty and <c>/api/chat</c> answers 502,
+    /// and that turn's report is written before the throw so it stays diagnosable.
+    /// A defaulted author would make it read as an ordinary turn by the entry agent,
+    /// which is the one thing this field exists to distinguish — so the field's only
+    /// failure signal would be the one thing a default erases.
+    /// </para>
+    /// </remarks>
+    public string? AnswerAgent { get; set; }
+
+    /// <summary>
     /// Whether a read-only tool actually ran this turn.
     /// </summary>
     /// <remarks>

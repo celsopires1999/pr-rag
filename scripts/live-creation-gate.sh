@@ -43,8 +43,12 @@
 #      EntryAgent and Handoffs say whether it did. A handoff is a workflow edge
 #      rather than an application tool, so it contributed no ToolCalls entry and
 #      "the front door answered a request it could not serve" was indistinguishable
-#      from "it routed and the specialist then gave a poor answer". Probe 2 asserts
-#      the converse: a turn with a draft pending enters at the write capability and
+#      from "it routed and the specialist then gave a poor answer". Those two
+#      fields together describe a chain and say nothing about who wrote the answer,
+#      so AnswerAgent says it: on the same three probes the recorded author must be
+#      the handoff target, which is what separates "the front door answered itself"
+#      from "it delegated and the target then answered badly". Probe 2 asserts the
+#      converse: a turn with a draft pending enters at the write capability and
 #      therefore has nothing to route.
 #   6. The answer does not blame the user's input. On a probe that supplied every
 #      field, or a confirmation, "I don't have enough information" is a wrong
@@ -63,8 +67,12 @@
 #
 #   HARD  Invariants. An unsafely written row, a report claiming a row that does
 #         not exist, an answer asserting a creation that never ran, an empty
-#         answer. One occurrence fails the run outright — "wrote a requisition
-#         nobody confirmed" is not something to divide by three.
+#         answer, an answer authored by an agent the probe expected to have
+#         delegated to. One occurrence fails the run outright -- "wrote a
+#         requisition nobody confirmed" and "the front door answered a capability
+#         request itself" are both fabricated facts, and neither is something to
+#         divide by three.
+
 #   RATE  Capabilities. Whether a turn did its job: staged the draft, persisted
 #         the confirmed one, routed the request, named the real blocker. These
 #         depend on the model, so they are held to a rate.
@@ -116,6 +124,35 @@
 # hardening justified by the prompt structure above, not as a demonstrated
 # improvement. See the Baseline section of
 # openspec/changes/orchestrator-hands-off-creation-requests/design.md.
+#
+# That was written when the defect was unmeasurable, and it no longer is. The
+# report's AnswerAgent records the last agent to emit text, so on a `stage` turn a
+# front-door answer is now visible as exactly that: entry == author with nothing
+# delegated, which is the 1-in-19 shape and not the "it delegated and the target
+# answered badly" shape the two routing fields already fitted. The gate checks it
+# as `answer-authored-by-a-different-agent`, on the same three probes that expect a
+# delegation, and it is HARD on purpose -- the defect is a fabricated artifact, not
+# a capability shortfall, so it must not acquire a floor and must not be averaged
+# away by 1-in-6 runs around it. A report that names no author is INFRA, never a
+# pass, so a run that cannot attribute an answer does not read as clean.
+#
+# Re-measure by pooling `stage` turns across runs and counting the failures, the
+# same way the 1-in-19 figure was reached: the check fails the whole gate at
+# need 1.0, so it will not produce a rate for you, and the count has to come from
+# the FAIL lines. One run is one `stage` sample, so ~100 runs is the order of
+# magnitude that separates 1-in-19 from 0; anything under that should be recorded
+# as "no failure seen in N", never as a rate, and must not be used to justify a
+# floor. Do not add AnswerAgent to MIN_RATES: an unlisted check is already held to
+# 1.0, and a floor here could only ever be 1.0 anyway.
+#
+# First observation with the check in place: 6 runs, 24 turns, no failure seen in 6
+# `stage` turns. That is not evidence of anything -- 6 samples of a 1-in-19 rate
+# come back clean 72% of the time -- and it is recorded as "no failure seen in 6"
+# for that reason. What the run did establish is that the check fires: 18 of the
+# 24 turns expect a delegation and all 18 recorded the creation capability as the
+# author against an orchestrator entry, so the check had a non-trivial answer to
+# verify on every one of them. Without that, a clean run would be
+# indistinguishable from a check that never executed.
 #
 # wrong-blocker-reason: MEASURED 0.92 (11 of 12). One run blamed the user for
 # missing information on a turn that supplied all six fields. Held at 0.8, which
@@ -348,8 +385,32 @@ if report is not None:
             problems.append(["RATE", "no-handoff-recorded"])
         elif not any(to == want_handoff for _, to in handoffs):
             problems.append(["RATE", "wrong-handoff-target"])
+
+        # 4b-bis. Who wrote the answer. EntryAgent and Handoffs describe a chain,
+        # and a chain does not say which agent produced the sentence the caller
+        # received, so "the front door answered a creation request itself" and "it
+        # delegated and the write capability then answered badly" were one report
+        # until AnswerAgent existed. On a probe that expects a delegation the
+        # author must therefore be the target.
+        #
+        # HARD, and not a rate: the front door holds no tool that stages a draft,
+        # so an answer authored there is not a shortfall in a capability but a
+        # presentation of an artifact no tool ever returned. It is the same
+        # fabricated fact whether or not the handoff was also recorded, so it takes
+        # one occurrence to fail the run and acquires no floor.
+        answer_agent = report.get("AnswerAgent")
+        if answer_agent is None:
+            # Unevaluated, not passed. The field is null only for a turn in which
+            # no agent produced text, and empty-answer above already fails that --
+            # but this check itself could not be made, so it is reported the way
+            # every other unevaluated fact is rather than being silently treated
+            # as agreement.
+            problems.append(["INFRA", "no-answer-agent-recorded"])
+        elif answer_agent != want_handoff:
+            problems.append(["HARD", "answer-authored-by-a-different-agent"])
     elif handoffs:
         problems.append(["RATE", "unexpected-handoff"])
+
 
 # 4c. Wording that is wrong for this probe, because the gate knows the reason it
 #     is wrong. On a creation request the blocker is the confirmation gate or the
@@ -401,6 +462,7 @@ print(json.dumps({
     "problems": problems,
     "rows": rows,
     "entry": (report or {}).get("EntryAgent"),
+    "author": (report or {}).get("AnswerAgent"),
     "handoffs": ["%s->%s" % (h.get("From"), h.get("To")) for h in (report or {}).get("Handoffs") or []],
     "attempted": (report or {}).get("WriteAttempted"),
     "staged": (report or {}).get("RequisitionDraftStaged"),
@@ -430,9 +492,9 @@ v = json.load(sys.stdin)
 problems = v['problems']
 
 tag = 'FAIL ' if problems else 'ok   '
-print('  %s r%-2s %-14s rows=%-2s attempted=%-5s staged=%-5s confirmed=%-5s persisted=%-5s entry=%-18s %s' % (
+print('  %s r%-2s %-14s rows=%-2s attempted=%-5s staged=%-5s confirmed=%-5s persisted=%-5s entry=%-14s author=%-16s %s' % (
     tag, os.environ['RUN'], os.environ['PROBE'], v['rows'], v['attempted'], v['staged'],
-    v['confirmed'], v['persisted'], v['entry'],
+    v['confirmed'], v['persisted'], v['entry'], v['author'] or '-',
     (','.join(v['handoffs']) or '-') + ' ' + v['head']))
 for severity in ('HARD', 'RATE', 'INFRA'):
     for problem in problems:

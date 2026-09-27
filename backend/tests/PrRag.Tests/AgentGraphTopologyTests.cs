@@ -1130,6 +1130,347 @@ public class AgentGraphTopologyTests : IAsyncLifetime
         Assert.Equal(AgentIds.Creation, confirmed.EntryAgent);
     }
 
+    /// <summary>
+    /// Who wrote the answer, once a handoff has moved the turn.
+    ///
+    /// <para>
+    /// <see cref="RagQueryReport.EntryAgent"/> and
+    /// <see cref="RagQueryReport.Handoffs"/> describe a chain, and a chain does
+    /// not say which agent wrote the sentence the caller received. So the two
+    /// opposite failures this report exists to separate — the front door answering
+    /// a creation request itself, and the front door routing correctly to a
+    /// specialist that then answered badly — were one report until this field
+    /// landed. The slug is asserted, not the text: the text is the fake's, and a
+    /// test on the fake's own string would pass even if the field were filled from
+    /// the wrong place.
+    /// </para>
+    /// <para>
+    /// The two agents' text is made distinguishable with
+    /// <see cref="FakeChatClient.AnswerByAgent"/> because a single shared
+    /// <c>Answer</c> cannot say which agent produced the reply once a handoff has
+    /// moved the turn.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public async Task A_delegated_turn_records_the_target_as_the_answer_agent()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = "ORCHESTRATOR TEXT";
+        chatClient.AnswerByAgent[ToolNames.CreateRequisitionDraft] = "CREATION TEXT";
+
+        chatClient.HandOffToCreation(scope.ServiceProvider);
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a purchase requisition for ITM0001 from SUP000001",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Creation, report.AnswerAgent);
+    }
+
+    /// <summary>
+    /// The other half of the pair, and the one that makes the first half mean
+    /// something: an entry agent that answers its own turn is recorded as such, so
+    /// "answered in place" and "delegated" are two readings of the report rather
+    /// than one.
+    /// </summary>
+    [Fact]
+    public async Task A_turn_answered_without_delegating_records_the_entry_agent_as_the_author()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AutoHandoff = false;
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            ToolNames.ActivateSkill,
+            new Dictionary<string, object?> { ["name"] = "create-purchase-requisition" });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "activate the create purchase requisition skill",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Orchestrator, report.EntryAgent);
+        Assert.Empty(report.Handoffs);
+        Assert.Equal(AgentIds.Orchestrator, report.AnswerAgent);
+    }
+
+    /// <summary>
+    /// The field is not merely consistent with the answer; it is the answer's
+    /// agent.
+    /// </summary>
+    /// <remarks>
+    /// Derived rather than hardcoded, so this is the assertion that survives a
+    /// graph change. If a future composition let a different agent's text reach
+    /// the caller — the orchestrator wrapping a participant's reply in its own
+    /// prose, say — the field must follow the text, and this fails on the slug
+    /// that no longer matches instead of quietly reporting an author who did not
+    /// write what the user saw. Asserting a literal slug in a second place would
+    /// pass for the wrong reason.
+    /// </remarks>
+    [Fact]
+    public async Task The_recorded_author_is_the_agent_whose_text_the_caller_received()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        // The text each agent is scripted to produce, keyed by the slug the report
+        // will carry for it. Written as one table so the expected author is read
+        // off the answer rather than asserted as a second literal.
+        var spokenText = new Dictionary<string, string>
+        {
+            [AgentIds.Orchestrator] = "ORCHESTRATOR TEXT",
+            [AgentIds.Retrieval] = "RETRIEVAL TEXT",
+        };
+
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = spokenText[AgentIds.Orchestrator];
+        chatClient.AnswerByAgent[ToolNames.SearchByCodes] = spokenText[AgentIds.Retrieval];
+
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+
+        var response = await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "what is requisition from supplier SUP000001?",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var author = spokenText
+            .Where(kv => kv.Value == response.Answer)
+            .Select(kv => kv.Key)
+            .ToList();
+
+        Assert.Single(author);
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(author[0], report.AnswerAgent);
+    }
+
+    /// <summary>
+    /// A function call says nothing, so an agent that only called a tool is not
+    /// the author — even when that call is the last thing the turn produced.
+    ///
+    /// <remarks>
+    /// This is the case the rule exists for. Mid-loop, calling a tool is what an
+    /// agent does <em>instead</em> of answering, and the common turn calls several
+    /// in a row. Attributing the turn to whichever agent called a tool last would
+    /// report a mid-loop step as the author of the sentence the caller receives,
+    /// and the last caller here is the agent that held the answer in its hands and
+    /// returned nothing.
+    /// <para>
+    /// The fake answers with empty text so the turn completes rather than
+    /// throwing, which is the shape a provider that returns nothing produces. The
+    /// tool call is asserted in the report precisely because that is what a
+    /// function-call-only response leaves behind: the call happened, the answer did
+    /// not, and the field must reflect the second fact rather than the first.
+    /// </para>
+    /// </remarks>
+    /// </summary>
+    [Fact]
+    public async Task A_function_call_alone_does_not_make_its_agent_the_author()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+        chatClient.Answer = string.Empty;
+
+        await Assert.ThrowsAsync<ChatTurnFailedException>(
+            () => chat.AnswerAsync(new ChatRequest
+            {
+                Question = "what is requisition from supplier SUP000001?",
+                TopK = 5,
+                MinSimilarity = 0,
+            }));
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Contains(report.ToolCalls, c => c.Name == ToolNames.SearchByCodes);
+        Assert.Null(report.AnswerAgent);
+    }
+
+    /// <summary>
+    /// A streamed answer is attributed the same way a completed one is, so the
+    /// SSE channel is not the blind spot the non-streaming path is not.
+    /// </summary>
+    /// <remarks>
+    /// Driven through <see cref="IChatService.StreamAsync"/> on purpose. A streamed
+    /// response arrives as many updates, so an implementation that attributed on
+    /// the update rather than on the response would name whichever agent emitted
+    /// the first piece — and here the first text in the turn belongs to the
+    /// participant the orchestrator handed to, so a first-writer rule and a
+    /// last-writer rule disagree about the answer to this turn.
+    /// </remarks>
+    [Fact]
+    public async Task A_streamed_delegated_turn_records_the_agent_that_emitted_the_answer()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = "ORCHESTRATOR TEXT";
+        chatClient.AnswerByAgent[ToolNames.SearchByCodes] = "RETRIEVAL TEXT";
+
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+
+        var deltas = new List<string>();
+        await foreach (var delta in chat.StreamAsync(new ChatStreamRequest
+        {
+            Question = "what is requisition from supplier SUP000001?",
+            TopK = 5,
+            MinSimilarity = 0,
+        }))
+        {
+            deltas.Add(delta);
+        }
+
+        Assert.Equal("RETRIEVAL TEXT", string.Concat(deltas));
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Retrieval, report.AnswerAgent);
+    }
+
+    /// <summary>
+    /// A turn that reached no author is still a diagnosable turn, and it says so
+    /// rather than borrowing the entry agent's name.
+    /// </summary>
+    /// <remarks>
+    /// The target refuses the turn it was handed, so the model traffic is one
+    /// handoff and one thrown chat call: nothing in the turn ever produced text.
+    /// The report has to be written anyway — <c>/api/chat</c> answers 502 for
+    /// this turn, and a status code is not a diagnosis — and it has to be readable
+    /// as an unevaluated turn: the routing facts are present, and the author is
+    /// absent. A defaulted author would make this report identical to an ordinary
+    /// turn answered by the front door, which is precisely the misreading the
+    /// field exists to prevent.
+    /// </remarks>
+    [Fact]
+    public async Task A_turn_that_produced_no_answer_names_no_author_and_still_writes_its_report()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
+        chatClient.ThrowAfterHandoff = true;
+
+        await Assert.ThrowsAsync<ChatTurnFailedException>(
+            () => chat.AnswerAsync(new ChatRequest
+            {
+                Question = "what is requisition from supplier SUP000001?",
+                TopK = 5,
+                MinSimilarity = 0,
+            }));
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(string.Empty, report.Answer);
+        Assert.Null(report.AnswerAgent);
+
+        // The turn is unreadable-as-nothing: the routing that did happen is on the
+        // record, so an operator can see the turn was delegated and the target
+        // never spoke.
+        Assert.Equal(AgentIds.Orchestrator, report.EntryAgent);
+        Assert.Equal(
+            new[] { (AgentIds.Orchestrator, AgentIds.Retrieval) },
+            report.Handoffs.Select(h => (h.From, h.To)));
+    }
+
+    /// <summary>
+    /// The author is scoped to its turn, exactly as the handoff list is: a second
+    /// turn in the same context must not be credited with its predecessor's.
+    /// </summary>
+    /// <remarks>
+    /// The two per-scenario tests above each read a fresh session, so neither can
+    /// see a turn inheriting an earlier attribution. That is the one thing a field
+    /// held on the turn context is positioned to get wrong, and here the failure
+    /// is the loudest kind: an unrouted turn would report the previous turn's
+    /// specialist as its author, which is the same shape as the misattribution
+    /// this field was added to end.
+    /// <para>
+    /// One scope for both turns on purpose. The context is scoped per request, so
+    /// a fresh scope per turn would hand the second one an empty field and the
+    /// test would pass against code that never resets anything;
+    /// <see cref="HandoffAttributionTests.Beginning_a_turn_discards_the_previous_turns_author"/>
+    /// pins the reset itself.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_turn_does_not_inherit_the_previous_turns_answer_agent()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+        var reportsDir = Path.Combine(_dataDir, "reports");
+
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = "ORCHESTRATOR TEXT";
+        chatClient.AnswerByAgent[ToolNames.SearchByCodes] = "RETRIEVAL TEXT";
+
+        chatClient.HandOffToRetrieval(scope.ServiceProvider);
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_1",
+            ToolNames.SearchByCodes,
+            new Dictionary<string, object?> { ["suppliers"] = new[] { "SUP000001" } });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = "per-turn-author",
+            Question = "what is requisition from supplier SUP000001?",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var delegated = await ReadLastReportAsync(reportsDir);
+        Assert.Equal(AgentIds.Retrieval, delegated.AnswerAgent);
+
+        // The second turn is served by the entry agent. The context now holds the
+        // participant's slug, so a field that survived the turn boundary would
+        // name it here too — and this report, which delegated nothing, would read
+        // as a delegation.
+        chatClient.ResetScript();
+        chatClient.AnswerByAgent[ToolNames.ActivateSkill] = "ORCHESTRATOR TEXT";
+        chatClient.AutoHandoff = false;
+        chatClient.ToolCall = new FunctionCallContent(
+            "call_activate",
+            ToolNames.ActivateSkill,
+            new Dictionary<string, object?> { ["name"] = "create-purchase-requisition" });
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            SessionId = "per-turn-author",
+            Question = "activate the create purchase requisition skill",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var direct = await ReadLastReportAsync(reportsDir);
+        Assert.Empty(direct.Handoffs);
+        Assert.Equal(AgentIds.Orchestrator, direct.AnswerAgent);
+    }
+
     private async Task<RagQueryReport> ReadLastReportAsync(string reportsDir)
     {
         var file = Directory.GetFiles(reportsDir, "*.json")

@@ -142,4 +142,58 @@ public class HandoffAttributionTests
 
         Assert.Empty(turn.Handoffs);
     }
+
+    /// <summary>
+    /// The same reset for the answer's author, and it matters more than the list's
+    /// because the failure is a misattribution rather than a duplicate.
+    /// </summary>
+    /// <remarks>
+    /// A second turn that inherited its predecessor's author would report the
+    /// specialist that answered turn one as the author of turn two — so a turn the
+    /// front door answered itself, having delegated nothing, would read as a
+    /// delegation to a capability. That is the exact shape of the misreading the
+    /// field was added to end, produced by the field itself.
+    /// <para>
+    /// The counterpart that pins the end-to-end consequence is
+    /// <c>AgentGraphTopologyTests.A_turn_does_not_inherit_the_previous_turns_answer_agent</c>,
+    /// which reads a second report off disk; this one pins the reset itself, next
+    /// to the delegation reset it sits beside.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void Beginning_a_turn_discards_the_previous_turns_author()
+    {
+        var turn = new AgentTurnContext();
+        var state = new AgentSessionState();
+
+        turn.Begin(state, "session-a", topK: 5, minSimilarity: 0.7);
+        turn.RecordAnswerAuthor(AgentIds.Creation);
+        Assert.Equal(AgentIds.Creation, turn.AnswerAgent);
+
+        turn.Begin(state, "session-a", topK: 5, minSimilarity: 0.7);
+
+        Assert.Null(turn.AnswerAgent);
+    }
+
+    /// <summary>
+    /// The last agent to speak holds the attribution, so the field cannot name an
+    /// agent that was passed over on the way there.
+    /// </summary>
+    /// <remarks>
+    /// No coordination, no list, no revision history: every agent in the turn
+    /// writes the one field and the run's own ordering decides the value. The
+    /// alternative — recording the first agent to speak, or keeping a chain of
+    /// authors — would name an agent whose text was not the answer, which is the
+    /// one thing the report must not do.
+    /// </remarks>
+    [Fact]
+    public void The_last_agent_to_speak_holds_the_attribution()
+    {
+        var turn = new AgentTurnContext();
+
+        turn.RecordAnswerAuthor(AgentIds.Orchestrator);
+        turn.RecordAnswerAuthor(AgentIds.Creation);
+
+        Assert.Equal(AgentIds.Creation, turn.AnswerAgent);
+    }
 }

@@ -185,12 +185,13 @@ public sealed class AgentGraphComposer
             .ToList();
 
     /// <summary>
-    /// Wraps an agent's client so a handoff that agent makes is recorded. Bound per
+    /// Wraps an agent's client so the turn's traffic is attributed to it: the
+    /// handoffs that agent makes, and the answer if that agent wrote it. Bound per
     /// agent because the decorator is the only thing that knows which agent emitted
-    /// a given call.
+    /// a given call, and which one produced a given piece of text.
     /// </summary>
     private IChatClient Recording(IChatClient chatClient, string fromSlug, List<string> participantSlugs)
-        => new HandoffRecordingChatClient(chatClient, fromSlug, participantSlugs, _turn);
+        => new AgentAttributionChatClient(chatClient, fromSlug, participantSlugs, _turn);
 
     private static (ChatClientAgent Entry, List<AIAgent> Participants) EntryAtSpecialist(
         Dictionary<string, ChatClientAgent> bySlug,
