@@ -61,11 +61,11 @@ The DevContainer SHALL start the workspace without waiting for downstream servic
 - **THEN** the workspace container starts immediately without blocking on the `db` service healthcheck, while the database service remains available for running the API
 
 ### Requirement: Secrets not exposed to the container environment
-The DevContainer SHALL NOT inject API keys into the workspace container's environment, where they could be printed by Docker/Dev Containers tooling (e.g., `docker compose config` or extension logs).
+The DevContainer SHALL NOT inject any provider credential into the workspace container's environment, where they could be printed by Docker/Dev Containers tooling (e.g., `docker compose config` or extension logs). This covers the credential of every supported provider, not only one: the set of credentials that could be present grows with the number of providers, and an invariant written against a single credential silently stops covering the others.
 
-#### Scenario: API key absent from the devcontainer service environment
+#### Scenario: Provider credentials absent from the devcontainer service environment
 - **WHEN** the DevContainer configuration is inspected (e.g., `docker compose config` or Dev Containers logs)
-- **THEN** the OpenAI API key is not present in the `devcontainer` service environment, and the debug runtime reads it from `.env` via `envFile`
+- **THEN** no provider API key is present in the `devcontainer` service environment, for any supported provider, and the debug runtime reads it from `.env` via `envFile`
 
 ### Requirement: Source mounted as a volume, not copied
 The DevContainer SHALL obtain the project source via a bind-mounted volume (synchronized with the host), never by copying files into the image. Copying source is reserved for production/runtime images.

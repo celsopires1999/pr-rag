@@ -34,7 +34,15 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Development
       ConnectionStrings__Default: "Host=db;Port=5432;Database=${POSTGRES_DB:-prrag};Username=${POSTGRES_USER:-prrag};Password=${POSTGRES_PASSWORD:-prrag}"
-      OpenAI__ApiKey: ${OpenAI__ApiKey:?OpenAI__ApiKey must be set in the environment}
+      # The credential is a pass-through, not a `:?` requirement: the key that has
+      # to be present now depends on the selected provider, and compose can require
+      # only one name. The application's startup validation is the single place
+      # that says a credential is missing, and it names the key. This does not
+      # weaken the profile gate above, which is what keeps the value out of
+      # `docker compose config`.
+      OpenAI__ApiKey: ${OpenAI__ApiKey:-}
+      OpenAI__Provider: ${OpenAI__Provider:-openai}
+      OpenAI__Endpoint: ${OpenAI__Endpoint:-}
       OpenAI__EmbeddingModel: ${OpenAI__EmbeddingModel:-text-embedding-3-small}
       OpenAI__ChatModel: ${OpenAI__ChatModel:-gpt-4o-mini}
       RAG__TopK: ${RAG__TopK:-5}

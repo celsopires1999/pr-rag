@@ -262,6 +262,8 @@ All settings come from environment variables / `IConfiguration` (see `.env.examp
 
 | `.env` key (single source) | Section key | Default |
 |---|---|---|
+| `OpenAI__Provider` | `OpenAI:Provider` | `openai` |
+| `OpenAI__Endpoint` | `OpenAI:Endpoint` | *(required for `azure`)* |
 | `OpenAI__ApiKey` | `OpenAI:ApiKey` | *(required)* |
 | `OpenAI__EmbeddingModel` | `OpenAI:EmbeddingModel` | `text-embedding-3-small` |
 | `OpenAI__ChatModel` | `OpenAI:ChatModel` | `gpt-4o-mini` |
@@ -276,6 +278,28 @@ All settings come from environment variables / `IConfiguration` (see `.env.examp
 > `CORS__AllowedOrigins` is a comma-separated list of origins permitted to call the API cross-origin. Add `http://localhost:8080` when testing the UI served from the API host. Overriding it is required if you serve the front-end from a different port.
 
 > **Note:** the embedding model determines the vector dimension (1536 for `text-embedding-3-small`). Changing to a model with different dimensions requires a new migration/reindex.
+
+### Choosing a provider
+
+`OpenAI__Provider` selects who serves both the chat and the embedding client — there is no mixed configuration, and one process never holds credentials for two providers. Set it to `azure` and point `OpenAI__Endpoint` at your resource:
+
+```bash
+OpenAI__Provider=azure
+OpenAI__Endpoint=https://<resource>.openai.azure.com/openai/v1
+OpenAI__ApiKey=<that resource's key>
+OpenAI__ChatModel=<chat deployment name>
+OpenAI__EmbeddingModel=<embedding deployment name>
+```
+
+Notes on the Azure path:
+
+- **The endpoint must be an absolute `https` URL ending in `/openai/v1`** — the OpenAI-compatible surface. A bare resource host returns a `404` from a path that does not exist.
+- **The two model settings are deployment names, not model names.** They are used verbatim and are not checked against a model list, so `gpt-4o-mini-prod` is as valid as `gpt-4o-mini`. The startup log prints both, because a configuration that uses model names where deployment names belong is otherwise invisible until the first request.
+- **The embedding deployment must produce 1536-dimension vectors**, because the column is `vector(1536)`. A deployment with a different dimensionality needs a migration and a reindex, exactly as on OpenAI.
+- No new package and no second client type: Azure OpenAI is reached through the same OpenAI SDK, differing only in the endpoint. Nothing above the Infrastructure layer knows a provider exists.
+- Provider configuration is **validated at startup**. An unknown provider, a missing or malformed endpoint, or a blank key stops the host with an error naming the setting, rather than surfacing later as a `502` on a chat turn — which would be indistinguishable from a provider outage. The resolved provider and both deployment names are logged once at startup.
+
+> Entra ID is not supported yet; the Azure path uses an API key. The configuration section stays named `OpenAI` because the keys are literally true — Azure OpenAI is reached through the OpenAI SDK and the models are still OpenAI models; only the host and the deployment differ.
 
 ## How incremental ingestion works
 

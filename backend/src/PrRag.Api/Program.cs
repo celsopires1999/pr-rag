@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging;
 using PrRag.Api;
 using PrRag.Application;
 using PrRag.Application.Abstractions;
@@ -10,8 +11,16 @@ using PrRag.Infrastructure.Persistence;
 
 var builder = WebApplication.CreateBuilder(args);
 
+// A bootstrap logger, because AddInfrastructure resolves and validates the LLM
+// provider while the container is still being built. Disposed with the entry point.
+using var bootstrapLoggerFactory = LoggerFactory.Create(logging => logging
+    .AddConfiguration(builder.Configuration)
+    .AddConsole());
+
 builder.Services.AddApplication();
-builder.Services.AddInfrastructure(builder.Configuration);
+builder.Services.AddInfrastructure(
+    builder.Configuration,
+    bootstrapLoggerFactory.CreateLogger("PrRag.Startup"));
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddOpenApi();

@@ -2,21 +2,28 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.AI;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using OpenAI.Chat;
-using OpenAI.Embeddings;
+using Microsoft.Extensions.Logging;
 using PrRag.Application.Abstractions;
 using PrRag.Application.Configuration;
 using PrRag.Infrastructure.Embeddings;
 using PrRag.Infrastructure.Persistence;
+using PrRag.Infrastructure.Providers;
 using PrRag.Infrastructure.Services;
 
 namespace PrRag.Infrastructure;
 
 public static class DependencyInjection
 {
+    /// <param name="logger">
+    /// A bootstrap logger, because provider resolution happens while the container
+    /// is still being built and no <c>ILogger</c> is resolvable yet. The resolved
+    /// provider is logged here rather than from a hosted service so that the log
+    /// sits beside the validation that produced it.
+    /// </param>
     public static IServiceCollection AddInfrastructure(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        ILogger logger)
     {
         services.Configure<OpenAISettings>(configuration.GetSection(OpenAISettings.SectionName));
         services.Configure<RagSettings>(configuration.GetSection(RagSettings.SectionName));
@@ -34,14 +41,25 @@ public static class DependencyInjection
         services.AddDbContext<PrRagDbContext>(options =>
             options.UseNpgsql(connectionString, npgsql => npgsql.UseVector()));
 
-        var chatClient = new ChatClient(openAi.ChatModel, openAi.ApiKey);
-        var embeddingClient = new EmbeddingClient(openAi.EmbeddingModel, openAi.ApiKey);
+        var provider = LlmProviderResolver.Resolve(openAi);
+        var (chatClient, embeddingClient) = LlmClientFactory.Create(provider);
 
-        services.AddChatClient(_ => chatClient.AsIChatClient())
+        services.AddChatClient(_ => chatClient)
             .UseLogging();
 
-        services.AddEmbeddingGenerator(_ => embeddingClient.AsIEmbeddingGenerator())
+        services.AddEmbeddingGenerator(_ => embeddingClient)
             .UseLogging();
+
+        // The provider and both deployment names are logged because nothing else
+        // records them: the report, the status endpoint, and the chat log lines
+        // cannot answer which model served a request, and on Azure the model
+        // settings are deployment names whose correctness is not checkable offline.
+        logger.LogInformation(
+            "LLM provider resolved: provider={Provider} endpoint={Endpoint} chat={Chat} embeddings={Embeddings}",
+            provider.Provider,
+            provider.Endpoint?.ToString() ?? "(default)",
+            provider.ChatModel,
+            provider.EmbeddingModel);
 
         services.AddScoped<IPurchaseRequisitionRepository, PurchaseRequisitionRepository>();
         services.AddScoped<ICreatedRequisitionQuery, CreatedRequisitionQuery>();
