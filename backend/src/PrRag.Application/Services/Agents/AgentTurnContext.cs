@@ -54,6 +54,21 @@ public sealed class AgentTurnContext
     public string? EntryAgent { get; set; }
 
     /// <summary>
+    /// Whether the session held a staged, unwritten requisition draft at the
+    /// moment the entry point was resolved. Read from the same
+    /// <see cref="RequisitionDraftSessionState.HasUnwrittenDraft"/> predicate that
+    /// chose <see cref="EntryAgent"/>, and recorded beside it so the two cannot
+    /// disagree.
+    /// </summary>
+    /// <remarks>
+    /// Nullable rather than a bool, for the same reason <see cref="EntryAgent"/>
+    /// is: a turn that never composed has read no state, so null is "not asked"
+    /// and false is "asked, and no draft" — a distinction a report built from a
+    /// reused context would otherwise blur.
+    /// </remarks>
+    public bool? RequisitionDraftPendingAtEntry { get; set; }
+
+    /// <summary>
     /// The handoffs the turn made, in call order and deduplicated. Empty is
     /// meaningful: it means no agent handed the turn on, which no other report
     /// field can distinguish from a handoff that happened.
@@ -130,6 +145,11 @@ public sealed class AgentTurnContext
         // its predecessor's author would report an unrouted answer as a delegated
         // one, which is the specific misreading this field exists to prevent.
         AnswerAgent = null;
+        // Null, not false, because composition has not happened yet: this is
+        // reset before the entry point is resolved, so a value here would be the
+        // previous turn's reading of the session. Whatever the graph finds is
+        // written after, and a turn that never composes leaves it null.
+        RequisitionDraftPendingAtEntry = null;
         DraftStaged = false;
         DraftPresented = false;
         DraftConfirmed = false;

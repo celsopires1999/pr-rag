@@ -55,6 +55,26 @@ public sealed class RequisitionCreationSpecialist
     /// was never staged — is a fabricated fact, and the prompt now names it
     /// outright.
     /// </para>
+    /// <para>
+    /// The draft-state paragraph in this block replaced a conditional the model
+    /// could not evaluate. The text it replaced said: a turn answering a draft you
+    /// presented, <em>and</em> that you hold none — "Then, and only then, say that
+    /// no requisition draft is awaiting their confirmation and ask them to describe
+    /// the requisition." The antecedent is readable in the conversation, the
+    /// consequent is a fact only the application holds, and nothing in the rule
+    /// said to check the premise, so the model could satisfy the condition and skip
+    /// the check. It did, 3 turns out of 3, on the
+    /// <c>confirmed</c> probe of the <c>gpt-5-mini</c> live run recorded in
+    /// <c>reports/20260927*</c>: every one of those reports reads
+    /// <c>EntryAgent=prrag.creation</c> and <c>tools=[]</c> with an answer denying
+    /// the draft, and the turn had been routed to this agent precisely because
+    /// <c>AgentGraphComposer.ResolveEntryPoint</c> found one staged. See
+    /// <c>2026-09-27-add-azure-openai-provider</c> §5.6. The same shipped text
+    /// passed on <c>gpt-4o-mini</c>, which is why the rule is gone rather than
+    /// counter-weighted: no replacement prose repairs a conditional the model
+    /// cannot check. What replaces it is a tool call, whose result is the
+    /// authority on the same question in both directions.
+    /// </para>
     /// </summary>
     public const string ActionBlock =
         """
@@ -91,11 +111,22 @@ public sealed class RequisitionCreationSpecialist
         confirmation as normal: an unconfirmed draft is the only thing you can leave behind, and writing one is the
         only irreversible thing you can do.
 
-        Only one shape is a question about draft state: the user is answering a draft you actually presented — "yes, I
-        confirm it", "go ahead and create it" — and you hold none. Then, and only then, say that no requisition draft
-        is awaiting their confirmation and ask them to describe the requisition. The test is whether the user is
-        answering a draft you presented, not whether their turn happens to contain the word "confirmation": a turn
-        that also carries the six fields is a new request, not a confirmation of nothing.
+        A turn that reads as an answer to a draft — "yes, I confirm it", "go ahead and create it" — is answered by
+        calling `confirm_requisition_draft` and reporting what it returns. That result is the only authority on
+        whether a draft is waiting, in either direction: if it records a confirmation, carry on to
+        `create_requisition`; if it says there is no draft, say so and ask the user to describe the requisition.
+        Never settle a draft-state question from the wording of the turn, because the wording is what you can read
+        and the draft is not. The test is whether the user is answering a draft you presented, not whether their
+        turn happens to contain the word "confirmation": a turn that also carries the six fields is a new request,
+        not a confirmation of nothing.
+
+        Present a draft with the values `create_requisition_draft` returned, because it returned them. Do not
+        compose a draft out of the user's own field list, and do not present one that no tool returned.
+
+        `confirm_requisition_draft` is the only step that advances this path, and that is a fact about the system
+        rather than advice: a requisition cannot be persisted without a confirmation, and only that call records
+        one. No sentence you write moves anything — an answer saying a draft is staged has staged nothing, and the
+        next turn will find exactly the state this one found.
 
         Never assert a draft you have not staged, and never present one you have not staged. A claim that a draft
         exists is a fabricated fact, and it is the one failure on this path that is not safe. Never tell the user you

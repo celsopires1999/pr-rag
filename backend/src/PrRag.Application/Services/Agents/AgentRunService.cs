@@ -56,11 +56,33 @@ public sealed class AgentRunService : IAgentRunService
     /// point can be resolved from the turn's state. For per-agent assertions and
     /// routing diagnostics.
     /// </summary>
-    public ComposedAgentGraph Graph => _graph ??= _composer.Compose(
-        _chatClient,
-        _skillService,
-        _catalog,
-        AgentGraphComposer.ResolveEntryPoint(_turnContext.State));
+    public ComposedAgentGraph Graph => _graph ??= ComposeForTurn();
+
+    /// <summary>
+    /// Resolves the entry point, records the state it was resolved from, and
+    /// composes the graph for it.
+    /// </summary>
+    /// <remarks>
+    /// The entry-state record is taken here rather than in
+    /// <c>ChatService.Begin</c> or derived from the recorded
+    /// <see cref="AgentTurnContext.EntryAgent"/> string, because both would be a
+    /// different fact. <c>Begin</c> runs before the decision, so a read there is
+    /// one step ahead of what routed the turn, and it would put the predicate in a
+    /// file with no reason to know it. Deriving from the slug is worse: the slug
+    /// cannot say what the state was, so the field would be an inference wearing a
+    /// recorded fact's clothes, and it would claim to have read a session on a turn
+    /// that never composed. Here it is the same predicate the entry point itself
+    /// uses, read at the same moment, which is why a test can assert the two agree
+    /// instead of hoping they do.
+    /// </remarks>
+    private ComposedAgentGraph ComposeForTurn()
+    {
+        var entryPoint = AgentGraphComposer.ResolveEntryPoint(_turnContext.State);
+        _turnContext.RequisitionDraftPendingAtEntry =
+            RequisitionDraftSessionState.HasUnwrittenDraft(_turnContext.State);
+
+        return _composer.Compose(_chatClient, _skillService, _catalog, entryPoint);
+    }
 
     public ValueTask<AgentSession> CreateSessionAsync(CancellationToken cancellationToken = default)
         => Graph.Agent.CreateSessionAsync(cancellationToken);

@@ -80,6 +80,36 @@ public sealed class RagQueryReport
     public string? EntryAgent { get; set; }
 
     /// <summary>
+    /// Whether a requisition draft was staged and not yet written at the moment
+    /// the entry point was resolved — the state the entry point was chosen from,
+    /// and the reason <see cref="EntryAgent"/> is the agent it is.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// <see cref="EntryAgent"/> says where the turn went; this says what was true
+    /// when that choice was made. The two are one decision, and reading them apart
+    /// left a contradiction invisible: a turn that entered at the write capability
+    /// <em>because</em> the application was holding a draft, called no write tool,
+    /// and told the user no draft was awaiting confirmation reads as an ordinary
+    /// turn answered by the entry agent until you know the draft existed — at
+    /// which point the answer contradicts the application state that routed the
+    /// turn in the first place. That turn is real: it is the shape the
+    /// <c>confirmed</c> live probe produced 3 turns out of 3, and this field is
+    /// what makes it checkable without re-deriving it from a session that is gone.
+    /// </para>
+    /// <para>
+    /// Nullable for the same reason <see cref="EntryAgent"/> and
+    /// <see cref="AnswerAgent"/> are: a turn that failed before the graph was
+    /// composed read no session state, and recording <c>false</c> would be a claim
+    /// about something never asked. Paired with the entry agent, this is also the
+    /// falsifier for a one-directional gate check: a recorded draft at entry plus
+    /// <see cref="WriteAttempted"/> being false plus an answer denying a draft is
+    /// a fabricated fact, and none of the three alone can say so.
+    /// </para>
+    /// </remarks>
+    public bool? RequisitionDraftPendingAtEntry { get; set; }
+
+    /// <summary>
     /// The handoffs the turn made, in call order. Empty means no agent handed the
     /// turn on.
     /// </summary>

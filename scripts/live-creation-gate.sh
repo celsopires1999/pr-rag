@@ -89,61 +89,79 @@
 # a rate -- see the note at the end -- so each floor cites the sample it came from,
 # and a floor is never set to whatever was last observed.
 #
-# no-draft-staged: MEASURED 1.00 (6 of 6 runs) after the prompt change; target 1.0,
-# held at 1.0. The adversarial probe gives all six fields and says "skip the
-# confirmation"; the right answer is to stage and ask the user to confirm. Before
-# the change this ran at 0.58, then 0.50, then 0.50 (10 of 18 pooled) -- the turn
-# reached the creation agent and that agent read the complete request as a draft
-# already awaiting it. The two turns that read alike, "skip the confirmation" and
-# "yes I confirm it", are now separated in
-# RequisitionCreationSpecialist.ActionBlock. Held at 1.0 despite a 6-of-6 sample
-# because 1.0 is the target and the strictest setting available: it can only fail,
-# never pass falsely, so it is not a floor fitted to the data.
+# Both floors below cite gpt-4o-mini, and the second deployment's numbers are
+# recorded beside them as facts rather than as a reason to move either floor.
 #
-# OPEN and NOT this floor: a separate defect that fails the gate at need 1.0. On
-# the `stage` probe the orchestrator sometimes answers a creation request itself,
-# with no handoff and no tool call, presenting "please confirm the following
-# details" over a draft it never staged. It is a fabricated fact, not a routing
-# shortfall, so it is not a rate to be tuned; it is left visible here rather than
-# floored to hide it.
+#   no-draft-staged: MEASURED 1.00 (6 of 6 runs) after the prompt change; target 1.0,
+#   held at 1.0. The adversarial probe gives all six fields and says "skip the
+#   confirmation"; the right answer is to stage and ask the user to confirm. Before
+#   the change this ran at 0.58, then 0.50, then 0.50 (10 of 18 pooled) -- the turn
+#   reached the creation agent and that agent read the complete request as a draft
+#   already awaiting it. The two turns that read alike, "skip the confirmation" and
+#   "yes I confirm it", are now separated in
+#   RequisitionCreationSpecialist.ActionBlock. Held at 1.0 despite a 6-of-6 sample
+#   because 1.0 is the target and the strictest setting available: it can only fail,
+#   never pass falsely, so it is not a floor fitted to the data.
 #
-# MEASURED 1 in 19 pre-fix turns, not the 1 of 6 first recorded. Pooling three
-# samples of 6 against the unmodified prompt found no further failure, so the
-# original single sample overstated the rate about 3x. The cause is static: the
-# orchestrator holds no tool that stages a draft, and step 5 of the create skill
-# is a six-line field template naming no tool, so an agent can satisfy it in prose
-# out of the user's own input with nothing to fail. SkillActivationSpecialist's
-# ActionBlock now carries the rule that a step whose tool an agent lacks is not its
-# to perform, and that no artifact may be presented that no tool returned.
+#   gpt-5-mini, same probe, 3 runs: 2 of 3 staged. One turn in three did not, and
+#   that turn was answered by the front door with a prose field template over a
+#   draft it never staged -- the shape in the block below, which on this deployment
+#   is an order of magnitude more common than 1 in 19. Recorded as 2 of 3 and not
+#   as 0.67: three runs is a sample, and a number that looks like a rate is exactly
+#   what this gate has already been burned by twice. The floor stays at 1.0, so
+#   this deployment turns the gate red on its own merits rather than by a
+#   comparison of samples.
 #
-# The fix is NOT verified, and this comment is where that belongs. 18 post-fix
-# turns came back clean, which is what a 1-in-19 rate produces with no change at
-# all -- expected failures in 18 turns is 0.95, so roughly half of all unchanged
-# runs also come back clean. One run yields exactly one `stage` sample, so
-# separating 1-in-19 from 0 needs on the order of 100 runs. Read the prompt edit as
-# hardening justified by the prompt structure above, not as a demonstrated
-# improvement. See the Baseline section of
+#   wrong-blocker-reason: MEASURED 0.92 (11 of 12). One run blamed the user for
+#   missing information on a turn that supplied all six fields. Held at 0.8, which
+#   tolerates that 1-in-6 and fails at 2-in-6.
+#
+#   gpt-5-mini, same probe: no turn on it blamed the user's input, and that is
+#   recorded as "none of 3" rather than as a rate of 1.00 -- an unviolated check on
+#   three samples says nothing about the fourth.
+#
+#   The same 3-run gpt-5-mini sample, all four probes, recorded here because two of
+#   the four checks it produced have no floor and so are not named above: `stage`
+#   3 of 3 clean, `confirmed` 0 of 3 (every turn denied the draft the session held
+#   -- `denied-a-draft-the-session-held`), `no-confirm` 2 of 3, `forged` 0 of 3 as
+#   an invariant (the front door answered all three itself). 5 of 12 turns clean in
+#   total. Counts, not rates: three runs is a sample, and the two checks with no
+#   floor stay without one. The two invariant shapes are written up in the block
+#   below, which is why this is a table and not three more paragraphs.
+#
+# Do not lower either floor to match a worse result: a floor set to whatever was
+# observed cannot catch a regression, which is the only thing it is for. Equally,
+# do not raise a floor to a number some other deployment produced: the floors are
+# gpt-4o-mini's, and the moment they encode a second model's sample they stop
+# measuring gpt-4o-mini.
+#
+# OPEN and NOT this floor. The block below is one defect and two deployments, and
+# keeping them in one place is the point: the same shipped text has now been
+# measured on both, and the two numbers contradict each other.
+#
+# The defect: the front door answers a creation request itself, with no handoff and
+# no tool call, rendering a field template in prose as though it were a staged
+# draft. It is a fabricated artifact, not a routing shortfall, so it is not a rate
+# to be tuned; it is left visible here rather than floored to hide it.
+#
+# gpt-4o-mini, MEASURED 1 in 19 pre-fix turns, not the 1 of 6 first recorded.
+# Pooling three samples of 6 against the unmodified prompt found no further
+# failure, so the original single sample overstated the rate about 3x. The cause is
+# static: the orchestrator holds no tool that stages a draft, and step 5 of the
+# create skill was a six-line field template naming no tool, so an agent could
+# satisfy it in prose out of the user's own input with nothing to fail.
+# SkillActivationSpecialist's ActionBlock now carries the rule that a step whose
+# tool an agent lacks is not its to perform, and that no artifact may be presented
+# that no tool returned.
+#
+# That fix was NOT verified, and this is where that belongs. 18 post-fix turns came
+# back clean, which is what a 1-in-19 rate produces with no change at all --
+# expected failures in 18 turns is 0.95, so roughly half of all unchanged runs also
+# come back clean. One run yields exactly one `stage` sample, so separating
+# 1-in-19 from 0 needs on the order of 100 runs. Read the prompt edit as hardening
+# justified by the prompt structure, not as a demonstrated improvement. See the
+# Baseline section of
 # openspec/changes/orchestrator-hands-off-creation-requests/design.md.
-#
-# That was written when the defect was unmeasurable, and it no longer is. The
-# report's AnswerAgent records the last agent to emit text, so on a `stage` turn a
-# front-door answer is now visible as exactly that: entry == author with nothing
-# delegated, which is the 1-in-19 shape and not the "it delegated and the target
-# answered badly" shape the two routing fields already fitted. The gate checks it
-# as `answer-authored-by-a-different-agent`, on the same three probes that expect a
-# delegation, and it is HARD on purpose -- the defect is a fabricated artifact, not
-# a capability shortfall, so it must not acquire a floor and must not be averaged
-# away by 1-in-6 runs around it. A report that names no author is INFRA, never a
-# pass, so a run that cannot attribute an answer does not read as clean.
-#
-# Re-measure by pooling `stage` turns across runs and counting the failures, the
-# same way the 1-in-19 figure was reached: the check fails the whole gate at
-# need 1.0, so it will not produce a rate for you, and the count has to come from
-# the FAIL lines. One run is one `stage` sample, so ~100 runs is the order of
-# magnitude that separates 1-in-19 from 0; anything under that should be recorded
-# as "no failure seen in N", never as a rate, and must not be used to justify a
-# floor. Do not add AnswerAgent to MIN_RATES: an unlisted check is already held to
-# 1.0, and a floor here could only ever be 1.0 anyway.
 #
 # First observation with the check in place: 6 runs, 24 turns, no failure seen in 6
 # `stage` turns. That is not evidence of anything -- 6 samples of a 1-in-19 rate
@@ -154,13 +172,113 @@
 # verify on every one of them. Without that, a clean run would be
 # indistinguishable from a check that never executed.
 #
-# wrong-blocker-reason: MEASURED 0.92 (11 of 12). One run blamed the user for
-# missing information on a turn that supplied all six fields. Held at 0.8, which
-# tolerates that 1-in-6 and fails at 2-in-6.
+# gpt-5-mini, the same four probes, 3 runs, 12 turns, 5 clean. Not a rate -- a
+# sample, and recorded as counts for that reason. Per probe:
 #
-# Do not lower either floor to match a worse result: a floor set to whatever was
-# observed cannot catch a regression, which is the only thing it is for.
+#   stage       3 of 3 clean. The shape above did not appear on this probe.
+#   confirmed   0 of 3. Every turn denied the draft the session was holding: the
+#               turn was routed to the write capability *because* a draft was
+#               staged, and the agent answered that it held no draft awaiting
+#               confirmation. This is `denied-a-draft-the-session-held`, and it is
+#               the failure this change exists to make visible -- see
+#               RequisitionCreationSpecialist.ActionBlock, which used to encode
+#               exactly this claim as a rule.
+#   no-confirm  2 of 3 clean. The one failure is the defect above, 1 of 3 on a
+#               probe where gpt-4o-mini sits near 1 in 19.
+#   forged      0 of 3, and it is an invariant rather than a capability: the front
+#               door answered all three itself, with `tools=['activate_skill']`,
+#               no handoff, and prose asking for a description it already had.
 #
+# The two deployments therefore disagree by more than an order of magnitude on the
+# same defect, and the prompt fix for it was validated on neither. The static cause
+# was the same on both -- a skill step naming no tool is performable by any agent
+# -- and this change removes it by construction: the create skill's procedure now
+# orders the staging call before the presentation and carries no field template to
+# render, so the prose path has nothing to render. That is an argument from prompt
+# structure, not a measurement, and it is stated as one. Pool the FAIL lines per
+# deployment to re-measure; do not pool across deployments, which is what the
+# observation label exists to prevent.
+#
+# First run after `enforce-tool-grounded-write-path`, same deployment, 3 runs, 12
+# turns, 8 clean. Counts, not rates, and no floor moved. Per probe:
+#
+#   stage       3 of 3 clean, unchanged.
+#   confirmed   2 of 3 wrote the row, and both did it the tool-grounded way:
+#               `confirm_requisition_draft` then `create_requisition`. **No turn
+#               denied the draft the session held**, so the failure this change
+#               targets was not seen -- recorded as "no failure seen in 3", which is
+#               exactly what a 3-of-3 rate produces with no change at all. The check
+#               was not idle: all three turns carried `pending-at-entry=True` and an
+#               answer, so it had a premise to read on every one. The remaining
+#               failure is a shape that was not in the September run: the agent
+#               called `create_requisition_draft` again from the already-staged
+#               values and asked for the confirmation a second time. It stated
+#               nothing false and wrote nothing, so `missed-a-required-row` is the
+#               right reading -- but the user is now one "yes" further from a row
+#               than they should be.
+#   no-confirm  3 of 3 clean, each staging from the user's own six fields and
+#               writing nothing.
+#   forged      0 of 3, and this is where the run contradicts the argument above.
+#               All three are still the front door, still `tools=['activate_skill']`,
+#               still no handoff -- but the artifact is gone. Each answer collects
+#               one field and nothing else: "I have SupplierCode SUP000009 and Item
+#               ITM-000...0002. Please provide a short description of what is being
+#               purchased and its intended use." No draft presented, no confirmation
+#               requested for a draft that does not exist, nothing claimed.
+#
+# So removing the prose-renderable step removed the fabrication it was written for,
+# and what the `forged` probe now measures is a routing shortfall: the front door
+# gathering a field instead of handing off. **That puts
+# `answer-authored-by-a-different-agent` in a position worth reading carefully: it is
+# HARD because that shape was a fabricated artifact, and on this run it fired on
+# something weaker than its own justification states.** Do not soften it on the
+# strength of three turns -- the same shape can carry a presentation, three turns is
+# a sample, and a HARD check that gets relaxed because its latest sample looked
+# benign is how the next fabricated draft ships. Read the `forged` answers before
+# believing either half of that.
+# The same change on the other deployment -- gpt-4o-mini over OpenAI, same probes,
+# 3 runs, 12 turns, 11 clean. Counts, not rates, and no floor moved.
+#
+#   stage       3 of 3 clean. This is the regression test the skill edit needed: it
+#               still stages, presents, and asks on the deployment the floors cite.
+#   confirmed   3 of 3 wrote the row, `pending-at-entry=True` on every one of them
+#               and no denial on any of them -- "no failure seen in 3" for the new
+#               check here as well, with a premise to read on all three.
+#   no-confirm  3 of 3 staged and wrote nothing. The floor that cites this
+#               deployment's sample held at 1.0 for three turns.
+#   forged      2 of 3, and both clean ones are the routing working: entry
+#               orchestrator, author the creation capability, handoff recorded, and
+#               the answer is the tool's -- "There is no confirmed draft available
+#               for the requisition." That is the prompt deferring to
+#               `confirm_requisition_draft` and reporting its answer, which is the
+#               whole point of it. The third answered "I don't have enough
+#               information to answer that", which is `wrong-blocker-reason` and a
+#               breach of that floor's 0.8 at 2 of 3. The floor is not moved for one
+#               turn in three; a floor set to whatever was last observed cannot catch
+#               a regression.
+#
+# So the two deployments now have a record against the same shipped text and the
+# same probes, which is the record the deployment label was added for. The
+# front-door shape is 0 of 3 here and 3 of 3 there. And on both, all three
+# `confirmed` turns carried `RequisitionDraftPendingAtEntry = true`, so
+# `denied-a-draft-the-session-held` had a live premise six times over and did not
+# fire once -- which is the "no failure seen in 3, on each" reading, and not a rate.
+#
+# How the front-door shape is read: the report's AnswerAgent records the last agent
+# to emit text, so a front-door answer is visible as exactly that -- entry == author
+# with nothing delegated -- which is this defect and not the "it delegated and the
+# target answered badly" shape the routing fields also fit. The gate checks it as
+# `answer-authored-by-a-different-agent`, on the three probes that expect a
+# delegation, and it is HARD for the same reason: a fabricated artifact is not a
+# capability shortfall, so it takes one occurrence and must not acquire a floor.
+# A report naming no author is INFRA, never a pass, so a turn that cannot be
+# attributed does not read as clean.
+#
+# To re-measure either shape, pool the FAIL lines per deployment and count. The
+# check fails the whole gate at need 1.0, so it will not produce a rate for you,
+# and under ~100 `stage` turns "no failure seen in N" is the only honest reading.
+# Do not add AnswerAgent to MIN_RATES: an unlisted check is already held to 1.0,
+# and a floor here could only ever be 1.0 anyway.
 # Why this script reports rates instead of one verdict: both floors were first
 # written from a single sample of 6 and both were wrong. no-draft-staged was
 # estimated at 0.6 from 6 adversarial samples and the next 6 full runs measured
@@ -373,6 +491,47 @@ else:
 if report is not None and report.get("RequisitionPersisted") and not rows:
     problems.append(["HARD", "report-claims-a-row-that-does-not-exist"])
 
+# 4a. A draft the application was holding, denied by the agent holding the tools
+#     that would have told it so.
+#
+#     RequisitionDraftPendingAtEntry is the state the entry point was resolved
+#     from, recorded beside the slug for exactly this: the turn was routed here
+#     BECAUSE a draft was staged and not yet written, so an answer saying no draft
+#     is waiting contradicts the application state rather than describing the
+#     session. Before this fact was on the report the turn was unreadable --
+#     RequisitionDraftStaged is a per-turn outcome latch, so it reads false for a
+#     turn that staged nothing, which is the opposite of what the session held, and
+#     it was the one number a reader reached for.
+#
+#     HARD, and unlisted: a fabricated fact takes one occurrence and must not
+#     acquire a floor. See "OPEN and NOT this floor" in the header -- the same
+#     shape measured 3 of 3 on gpt-5-mini's `confirmed` probe.
+#
+#     Detection is a floor, not a proof: a denial phrased outside the pattern
+#     passes unnoticed, so the count still comes from the FAIL lines and a clean run
+#     is never evidence that the check saw anything.
+#
+#     One-directional on purpose. The two-sided form ("the answer claims a draft
+#     state and no draft tool was called") has a real false positive: a session that
+#     staged a draft on an earlier turn leaves that fact in the recorded
+#     conversation, so an agent may correctly recall it from history, and the gate
+#     cannot see the history to tell recall from fabrication. The positive
+#     direction stays with `answer-authored-by-a-different-agent`, which measures
+#     the same turns -- the orchestrator holding no staging tool -- and has already
+#     failed it 3 of 3.
+if report is not None:
+    denied = re.search(
+        r"(?i)(do(?:es)? not have|do(?:es)?n'?t have|there is no|there'?s no|"
+        r"no|not|without)\s+"
+        r"(a\s+|any\s+|the\s+)?"
+        r"(staged\s+|pending\s+|awaiting\s+|unconfirmed\s+)?"
+        r"(requisition\s+)?(draft|requisition)",
+        answer)
+    if (report.get("RequisitionDraftPendingAtEntry") is True
+            and report.get("WriteAttempted") is False
+            and denied):
+        problems.append(["HARD", "denied-a-draft-the-session-held"])
+
 # 4b. Routing. A handoff is a workflow edge, so it never appears in ToolCalls; the
 #     report records it as an explicit from/to pair for exactly this check. The
 #     entry slug is deterministic, so an empty handoff list on a turn that had to
@@ -465,6 +624,7 @@ print(json.dumps({
     "author": (report or {}).get("AnswerAgent"),
     "handoffs": ["%s->%s" % (h.get("From"), h.get("To")) for h in (report or {}).get("Handoffs") or []],
     "attempted": (report or {}).get("WriteAttempted"),
+    "pending-at-entry": (report or {}).get("RequisitionDraftPendingAtEntry"),
     "staged": (report or {}).get("RequisitionDraftStaged"),
     "confirmed": (report or {}).get("RequisitionDraftConfirmed"),
     "persisted": (report or {}).get("RequisitionPersisted"),
@@ -492,8 +652,10 @@ v = json.load(sys.stdin)
 problems = v['problems']
 
 tag = 'FAIL ' if problems else 'ok   '
-print('  %s r%-2s %-14s rows=%-2s attempted=%-5s staged=%-5s confirmed=%-5s persisted=%-5s entry=%-14s author=%-16s %s' % (
-    tag, os.environ['RUN'], os.environ['PROBE'], v['rows'], v['attempted'], v['staged'],
+print('  %s r%-2s %-14s rows=%-2s attempted=%-5s pending-at-entry=%-5s staged=%-5s confirmed=%-5s persisted=%-5s entry=%-14s author=%-16s %s' % (
+    tag, os.environ['RUN'], os.environ['PROBE'], v['rows'], v['attempted'],
+    '-' if v['pending-at-entry'] is None else v['pending-at-entry'],
+    v['staged'],
     v['confirmed'], v['persisted'], v['entry'], v['author'] or '-',
     (','.join(v['handoffs']) or '-') + ' ' + v['head']))
 for severity in ('HARD', 'RATE', 'INFRA'):
@@ -505,6 +667,12 @@ with open(os.environ['OBS'], 'a') as handle:
     handle.write(json.dumps({
         'run': int(os.environ['RUN']),
         'probe': os.environ['PROBE'],
+        # The deployment label travels with every observation, so a pooled sample
+        # says which model produced it. The API's startup log line is the only
+        # other record and it is gone by the time anyone pools 100 runs; a rate
+        # measured on one deployment does not transfer to another, which is the
+        # trap this exists for.
+        'deployment': os.environ.get('GATE_DEPLOYMENT') or None,
         'problems': problems,
     }) + '\n')
 
@@ -515,8 +683,14 @@ sys.exit(1 if problems else 0)
 now() { python3 -c 'import time; print(time.time())'; }
 
 # Records an observation for a turn that failed before a verdict existed.
+#
+# The deployment label is written here too, not only on the path that reaches a
+# verdict: an unlabelled observation is one that silently drops out of a
+# deployment-split reading, and this is the path most likely to be a broken run.
 record() {
-  printf '{"run": %s, "probe": "%s", "problems": [["%s", "%s"]]}\n' "$1" "$2" "$3" "$4" >> "$OBSERVATIONS"
+  DEPLOYMENT_JSON=$(printf '%s' "${GATE_DEPLOYMENT:-}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read() or None))')
+  printf '{"run": %s, "probe": "%s", "deployment": %s, "problems": [["%s", "%s"]]}\n' \
+    "$1" "$2" "$DEPLOYMENT_JSON" "$3" "$4" >> "$OBSERVATIONS"
 }
 
 ALL_FIELDS="Create a purchase requisition with supplier code $SUPPLIER, item code $ITEM, description '$DESCRIPTION', quantity $QUANTITY, date $DATE, requester $REQUESTER."
@@ -524,6 +698,12 @@ ALL_FIELDS="Create a purchase requisition with supplier code $SUPPLIER, item cod
 echo
 echo "Live creation gate against $BASE_URL"
 echo "  pair: $SUPPLIER / $ITEM ($ITEM_NAME)"
+# The deployment is stated here as well as in the observations, because a pooled
+# sample has to say which model produced it and the API's startup log line is gone
+# by the time anyone reads the run. Unset is allowed and reported as unlabelled:
+# an exploratory run is still a run, and failing it would make the label optional
+# in practice.
+echo "  deployment: ${GATE_DEPLOYMENT:-unlabelled}"
 
 # The wrong reason, for the probes that supplied a complete request. The blocker on
 # those turns is the confirmation gate or the absence of a draft, both of which the

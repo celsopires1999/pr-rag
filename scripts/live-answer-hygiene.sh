@@ -41,6 +41,38 @@
 #
 # Usage:  scripts/live-answer-hygiene.sh [runs]        (default 8)
 # Needs the demo API on :8081 and the ./reports bind mount.
+#
+# Set GATE_DEPLOYMENT to a free-form label naming the deployment under test (e.g.
+# "azure/gpt-5-mini"). It is recorded on every observation and printed by the
+# summariser, because a hygiene rate measured on one deployment does not describe
+# another, and a pooled run that mixes them reports a rate for neither. Unset is
+# allowed and reported as unlabelled: an exploratory run is still a run, and
+# failing it would only teach people to pass a label they do not have.
+#
+# Measured, gpt-4o-mini over OpenAI, 8 runs, 8 clean: `RetrievalAttempted` true and
+# 5 rows on every turn, no narration, no claimed search that did not run. Routing was
+# entry `prrag.orchestrator` to author `prrag.retrieval` on all eight, via
+# `search_semantic`. That last part is the reading worth having after
+# `SkillActivationSpecialist` started appending an ownership notice to the
+# `activate_skill` result: a retrieval turn is exactly where an extra sentence in a
+# tool result could plausibly pull the front door into the read path. It did not, and
+# the notice itself is covered where it does fire by the creation gate's `stage`
+# probe, which activates a skill and still hands off (3 of 3 on both deployments).
+# Note what this run does not cover: `activate_skill` was never called on these eight
+# turns, so it is evidence about the read path, not about the notice.
+#
+# Measured, gpt-5-mini on Azure, 8 runs, 7 clean. Retrieval was attempted on all
+# eight with 5 rows, routing was orchestrator to `prrag.retrieval` via
+# `search_semantic` on all eight, and the one failure is a false positive in this
+# script's own matcher rather than a defect in the system: the answer ends
+# "If you want to filter by a specific supplier or an exact item code, tell me which
+# and I will search for those codes" -- an offer of future work, after a complete
+# grounded answer, on a turn whose report records `RetrievalAttempted = true` and 5
+# rows. The marker list is a bare substring test, so "I will search" cannot tell an
+# announcement of the search about to happen from a closing offer. Left as it is, and
+# read as a gate defect to fix deliberately rather than a measurement: the same
+# reasoning that keeps a HARD check off the rate tables applies to a matcher that
+# cannot distinguish its two targets.
 set -uo pipefail
 
 cd "$(dirname "$0")/.."
@@ -72,8 +104,14 @@ trap 'rm -f "$tmp_body" "$OBSERVATIONS"' EXIT
 
 # A turn that failed before a verdict existed still needs to be recorded, or an
 # unevaluated turn would silently leave the sample smaller than N.
+#
+# The deployment label is written here as well as on the verdict path, for the
+# reason it exists at all: a rate measured on one deployment is not evidence about
+# another, and this change is the second time that has bitten. Unset is allowed.
 record() {
-  printf '{"run": %s, "probe": "cold-search", "problems": [["%s", "%s"]]}\n' "$1" "$2" "$3" >> "$OBSERVATIONS"
+  DEPLOYMENT_JSON=$(printf '%s' "${GATE_DEPLOYMENT:-}" | python3 -c 'import json,sys;print(json.dumps(sys.stdin.read() or None))')
+  printf '{"run": %s, "probe": "cold-search", "deployment": %s, "problems": [["%s", "%s"]]}\n' \
+    "$1" "$DEPLOYMENT_JSON" "$2" "$3" >> "$OBSERVATIONS"
 }
 
 for i in $(seq 1 "$RUNS"); do
@@ -200,6 +238,11 @@ with open(os.environ['OBS'], 'a') as handle:
     handle.write(json.dumps({
         'run': int(os.environ['RUN']),
         'probe': 'cold-search',
+        # Which deployment produced this turn. Set GATE_DEPLOYMENT to a free-form
+        # label (e.g. "azure/gpt-5-mini"); the report must not carry a provider,
+        # model or endpoint, so the gate is the only place that record survives to
+        # the moment someone pools runs from more than one deployment.
+        'deployment': os.environ.get('GATE_DEPLOYMENT') or None,
         'problems': problems,
     }) + '\n')
 
@@ -213,6 +256,7 @@ done
 
 echo
 echo "turns=$((grounded + failed_runs))  clean=$grounded  with-problems=$failed_runs  (of $RUNS)"
+echo "deployment: ${GATE_DEPLOYMENT:-unlabelled}"
 
 # The verdict comes from the recorded observations rather than the counters, so
 # the per-run lines and this summary cannot drift apart.

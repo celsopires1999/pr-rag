@@ -30,9 +30,16 @@ from contextlib import redirect_stdout
 import gate_report
 
 
-def observation(run: int, probe: str, problems=None) -> str:
+def observation(run: int, probe: str, problems=None, deployment: str | None = None) -> str:
     """One JSONL observation, the shape the live gates emit."""
-    return json.dumps({"run": run, "probe": probe, "problems": problems or []})
+    return json.dumps(
+        {
+            "run": run,
+            "probe": probe,
+            "deployment": deployment,
+            "problems": problems or [],
+        }
+    )
 
 
 def run_gate(observations, *args) -> tuple[int, str]:
@@ -258,6 +265,116 @@ class ExpectProbesTests(unittest.TestCase):
 
         self.assertEqual(code, 0)
         self.assertIn("GATE: passed", out)
+
+
+class DeploymentLabelTests(unittest.TestCase):
+    """A rate measured on one deployment is not evidence about another.
+
+    This is not hypothetical: the same shipped prompt produced a passing creation
+    gate on gpt-4o-mini and a failing one on gpt-5-mini, and a pooled run would
+    have reported one number for the pair. The label does not fix that, because
+    splitting a sample that was already pooled cannot recover the missing
+    information -- it can only stop the next pooled run from being written without
+    noticing what it is.
+    """
+
+    def test_a_single_label_is_printed_with_its_turn_count(self):
+        code, out = run_gate(
+            [
+                observation(1, "stage", deployment="azure/gpt-5-mini"),
+                observation(2, "stage", deployment="azure/gpt-5-mini"),
+            ],
+            "--label", "GATE",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("deployment: azure/gpt-5-mini (2 of 2 turns)", out)
+        self.assertNotIn("MIXES", out)
+
+    def test_a_sample_mixing_deployments_says_so_and_describes_neither(self):
+        """The case that matters, and the one a single-label test cannot catch."""
+        code, out = run_gate(
+            [
+                observation(1, "stage", deployment="gpt-4o-mini"),
+                observation(2, "stage", deployment="azure/gpt-5-mini"),
+                observation(3, "stage", deployment="azure/gpt-5-mini"),
+            ],
+            "--label", "GATE",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("deployment: gpt-4o-mini (1 of 3 turns)", out)
+        self.assertIn("deployment: azure/gpt-5-mini (2 of 3 turns)", out)
+        self.assertIn("MIXES 2 deployments", out)
+        # A mixture is not a failure -- the turns were all evaluated and all held.
+        # Reporting it as one would make an unlabelled run preferable to an honest
+        # one, which is the opposite of what the label is for.
+        self.assertIn("GATE: passed", out)
+
+    def test_a_mixed_sample_still_aggregates_every_turn(self):
+        """The label is reported, never used to drop turns.
+
+        Filtering by deployment would make each label's rate look better than the
+        sample supports and would silently shrink the denominator the floors are
+        held against.
+        """
+        code, out = run_gate(
+            [
+                observation(1, "no-confirm", [["RATE", "no-draft-staged"]], deployment="gpt-4o-mini"),
+                observation(2, "no-confirm", deployment="azure/gpt-5-mini"),
+            ],
+            "--min-rate", '{"no-draft-staged": 0.9}',
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn("1/2", out)
+        self.assertIn("0.50", out)
+
+    def test_no_label_is_stated_and_never_fails_the_run(self):
+        """An unlabelled exploratory run is still a run.
+
+        Failing it would only teach people to pass a label they do not have, which
+        is worse than the missing label: the label would then be a fiction.
+        """
+        code, out = run_gate(
+            [observation(1, "stage"), observation(2, "stage")],
+            "--label", "GATE",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("unlabelled deployment on every turn", out)
+        self.assertIn("GATE_DEPLOYMENT", out)
+        self.assertIn("GATE: passed", out)
+
+    def test_a_blank_label_reads_as_unlabelled(self):
+        """Empty string is not a deployment name; it is the absence of one."""
+        code, out = run_gate(
+            [observation(1, "stage", deployment="")],
+            "--label", "GATE",
+        )
+
+        self.assertEqual(code, 0)
+        self.assertIn("unlabelled deployment on every turn", out)
+
+    def test_a_partly_labelled_sample_reports_the_labelled_turns(self):
+        """Not a failure, but the reader has to see that coverage is partial.
+
+        The failing path is a turn that died before a verdict, and those are the
+        observations most likely to lose a field added later.
+        """
+        code, out = run_gate(
+            [
+                observation(1, "stage", deployment="gpt-4o-mini"),
+                observation(2, "stage", [["INFRA", "no-report-for-this-turn"]]),
+            ],
+            "--label", "GATE",
+        )
+
+        self.assertEqual(code, 1)
+        self.assertIn("deployment: gpt-4o-mini (1 of 2 turns)", out)
+        # The count alone is inferable; saying it means a reader does not have to.
+        self.assertIn("1 turn(s) carry no deployment label", out)
+        self.assertNotIn("MIXES", out)
 
 
 class MalformedInputTests(unittest.TestCase):

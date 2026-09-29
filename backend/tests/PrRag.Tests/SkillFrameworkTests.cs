@@ -8,6 +8,7 @@ using PrRag.Application.DTOs;
 using PrRag.Infrastructure.Persistence;
 using Xunit;
 using PrRag.Application.Services.Agents;
+using PrRag.Application.Services.Agents.Specialists;
 
 namespace PrRag.Tests;
 
@@ -460,6 +461,75 @@ public class SkillFrameworkTests : IAsyncLifetime
             "Never present an artifact that no tool returned",
             orchestratorPrompt,
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The activation result says who the guidance it hands over is for, and says
+    /// it nowhere else.
+    /// </summary>
+    /// <remarks>
+    /// The capability rule already exists in the orchestrator's own instructions,
+    /// and it lost: the guidance arrives later, as a run-level system message, and
+    /// a model that has just read a procedure is inclined to perform it. So the
+    /// statement is also emitted by the tool that hands the guidance over —
+    /// adjacent to it, on that turn, in a channel a model weights differently from
+    /// an instruction it was given earlier.
+    /// <para>
+    /// Asserted on the tool result rather than on the prompt because that is where
+    /// it lives, and the second assertion is the half that keeps it safe: it names
+    /// no destination and no specialist. The graph owns routing, skill text is
+    /// policed for steering it, and this is a third channel that nothing policed —
+    /// so a line here telling the model where to send a turn would be a rule with
+    /// no guard and a new failure mode.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task The_activation_result_states_who_the_guidance_it_hands_over_is_for()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AutoHandoff = false;
+        chatClient.ScriptedToolCalls.Add(ActivationCall("create-purchase-requisition"));
+
+        await chat.AnswerAsync(new ChatRequest
+        {
+            Question = "create a purchase requisition",
+            TopK = 5,
+            MinSimilarity = 0,
+            SessionId = "activation-states-ownership",
+        });
+
+        using var document = JsonDocument.Parse(LastToolResult(chatClient));
+        var result = document.RootElement;
+        var message = result.GetProperty("message").GetString()!;
+        var body = result.GetProperty("body").GetString()!;
+
+        // The statement is present, and it travels with the guidance rather than
+        // replacing it: an agent that has just read a procedure is the one most
+        // likely to perform it, so the qualification is what has to arrive next.
+        Assert.Contains("the capability that owns the tools they name", message, StringComparison.Ordinal);
+        Assert.Contains("without giving you those tools", message, StringComparison.Ordinal);
+        Assert.Contains(body, message, StringComparison.Ordinal);
+
+        // The guidance itself is untouched, because the body is what later turns
+        // are given. A statement folded into it would be restated on every turn
+        // thereafter, which is how a run never ends.
+        Assert.DoesNotContain("Guidance, not capability", body, StringComparison.Ordinal);
+
+        // No routing, in this channel or any other.
+        foreach (var phrase in new[]
+                 {
+                     AgentIds.Orchestrator, AgentIds.Creation, AgentIds.Retrieval,
+                     "specialist", "hand off", "route to", "delegate to",
+                 })
+        {
+            Assert.False(
+                SkillActivationSpecialist.OwnershipNotice.Contains(phrase, StringComparison.OrdinalIgnoreCase),
+                $"The activation result's ownership statement names '{phrase}'. The graph owns routing, and " +
+                "a tool result that tells the model where to send a turn is a rule in a channel nothing polices.");
+        }
     }
 
     private async Task WriteJsonAsync(IEnumerable<PurchaseRequisitionImport> records)

@@ -1,8 +1,5 @@
-# live-gate-reporting Specification
+## MODIFIED Requirements
 
-## Purpose
-TBD - created by archiving change live-gate-reporting. Update Purpose after archive.
-## Requirements
 ### Requirement: Live gate checks are classified by what a failure would mean
 The system SHALL classify every check a live gate evaluates as an invariant, a rate, or an unevaluated turn, and SHALL NOT average across those kinds, because an occurrence that would be unsafe to ship and an occurrence of a model that did its job imperfectly do not belong on the same scale. A check whose violation is a claim that contradicts a state the application itself recorded SHALL be classified as an invariant rather than as a rate, whatever the probe expected to happen, because a statement the system knows to be false is not a capability shortfall.
 
@@ -52,33 +49,3 @@ The system SHALL state, next to each lowered rate floor, the pooled sample that 
 #### Scenario: A shortfall that is known to be open stays visible
 - **WHEN** a measured rate is below its target and the underlying defect is not yet fixed
 - **THEN** the shortfall is recorded as open and the floor is visibly below the target, so an accepted rate is not read as a fixed defect
-
-### Requirement: A clean gate run is distinguishable from a run that examined nothing
-The system SHALL report, for a run in which no check failed, how many turns each probe raised nothing on, and SHALL fail a probe that never reported at all, because a check that passes leaves no row and an absent row is otherwise indistinguishable from a check that never ran.
-
-#### Scenario: A clean run still shows what was checked
-- **WHEN** a gate run completes with no violation
-- **THEN** it reports the per-probe turn counts that raised nothing, so a clean result is readable as checked-and-clean
-
-#### Scenario: An empty table is stated as such
-- **WHEN** no check failed and therefore no failure rows exist
-- **THEN** the summary says so explicitly rather than printing an empty table
-
-#### Scenario: A probe that never reported fails the run
-- **WHEN** a probe the gate expected to exercise produced no turn
-- **THEN** the gate fails, because checks that never ran cannot have passed
-
-#### Scenario: No observations at all fails the run
-- **WHEN** a gate run recorded no turns
-- **THEN** the gate fails, because nothing was checked
-
-### Requirement: The gate verdict is derived from the recorded observations
-The system SHALL compute a gate's verdict from the recorded observations rather than from counters accumulated while running, so that the per-turn output and the aggregate verdict cannot disagree.
-
-#### Scenario: The human-readable line and the record come from one evaluation
-- **WHEN** a turn is evaluated
-- **THEN** the line shown to the operator and the observation recorded for aggregation are produced by the same evaluation of that turn
-
-#### Scenario: A counter cannot override the aggregate
-- **WHEN** the shell-level pass and fail counts would disagree with the recorded observations
-- **THEN** the recorded observations determine the verdict, because the counts are a convenience rather than the source of truth

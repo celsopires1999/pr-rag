@@ -31,6 +31,37 @@ public sealed class SkillActivationSpecialist
         * **Never present an artifact that no tool returned**: you have no basis for writing a draft, a summary, a table, or a request for the user to confirm, out of the user's own input or out of what the guidance describes. An artifact exists only once a tool has returned it, and describing one that no tool produced states a fact the system does not hold: the next turn will contradict you, and the user will have been asked to confirm something that does not exist. If you have no tool result, you have nothing to present.
         """;
 
+    /// <summary>
+    /// What <c>activate_skill</c>'s return value adds to the guidance it hands
+    /// over, and why it is here rather than in the guidance.
+    /// </summary>
+    /// <remarks>
+    /// <para>
+    /// The rule is the general form of one this repo already requires and enforces
+    /// nowhere: a step whose result needs a tool is not performable by an agent
+    /// without that tool. Its one expression so far is a capability rule in this
+    /// unit's <see cref="ActionBlock"/>, and a model can outweigh an instruction it
+    /// was given earlier in its own prompt — the live gate caught exactly that, the
+    /// orchestrator rendering a prose-renderable skill step as a draft it had never
+    /// staged. So the statement is emitted from the code that owns the tool set,
+    /// where it cannot drift from it the way prose in a markdown file can; it
+    /// lands adjacent to the guidance, on the turn the guidance is handed over; and
+    /// it is a tool result, which a model weights differently from an instruction.
+    /// </para>
+    /// <para>
+    /// It names no destination and no specialist. The graph decides who reaches
+    /// whom, and a channel nothing polices is the wrong place to start telling the
+    /// model where to send a turn. The
+    /// <see cref="ActionBlock"/> rule stays where it is: the two are independent
+    /// channels on purpose, because an agent that outweighs one may still read the
+    /// other.
+    /// </para>
+    /// </remarks>
+    public const string OwnershipNotice =
+        """
+        Guidance, not capability: the steps above describe work for the capability that owns the tools they name, and activating a skill hands you that guidance without giving you those tools. A step whose result can only come from a tool you were not given is not one to carry out yourself, and an artifact it would produce does not exist until that tool has returned it.
+        """;
+
     private readonly ISkillService _skillService;
     private readonly AgentTurnContext _turnContext;
     private readonly SpecialistToolSet _tools;
@@ -86,6 +117,6 @@ public sealed class SkillActivationSpecialist
 
         SkillSessionState.Activate(_turnContext.State!, skill.Name, skill.Body);
         _tools.Log(ToolNames.ActivateSkill, ["name"], startedAt, 1);
-        return ToolSkillActivation.Activated(skill.Name, skill.Body);
+        return ToolSkillActivation.Activated(skill.Name, skill.Body, OwnershipNotice);
     }
 }

@@ -30,6 +30,13 @@ Usage: one JSON observation per line on stdin, and optional per-check floors:
 An unlisted check defaults to 1.0, so the gate is exactly as strict as a
 single-run gate until a relaxation is written down deliberately, with the
 measurement that justified it recorded next to the flag.
+
+Observations may also carry a `deployment` label, and it is printed. It is never
+used to filter: pooling is where a rate stops being readable, because the same
+shipped prompt has produced opposite verdicts on two deployments, so a sample
+mixing them is stated as a mixture instead of being silently reported as one
+system's number. A missing label is stated too, and never fails -- an unlabelled
+exploratory run is still a run.
 """
 
 from __future__ import annotations
@@ -131,6 +138,64 @@ def count_severity(observations, severity):
     )
 
 
+def deployment_labels(observations):
+    """The distinct labels on this sample, in first-seen order.
+
+    Not a filter. Every observation counts toward every check regardless of the
+    deployment that produced it, because dropping turns from a pooled sample is
+    how a number stops matching the runs that were actually made. The label is
+    printed so a reader knows when the pooled figure describes more than one
+    deployment -- at which point the rate is a rate for the mixture, and the only
+    honest next step is to re-run per deployment.
+
+    A missing label is a real state, not an error to reject: the gates are also
+    run exploratorily, and a gate that fails for want of bookkeeping teaches
+    people to invent a label. It is stated instead.
+    """
+    labels = OrderedDict()
+    for observation in observations:
+        label = observation.get("deployment") or None
+        if label is not None:
+            labels[label] = labels.get(label, 0) + 1
+    return list(labels.items())
+
+
+def describe_deployments(observations):
+    """The deployment line(s), including the cases where there is nothing to say."""
+    labels = deployment_labels(observations)
+    if not labels:
+        return ["  --    unlabelled deployment on every turn; GATE_DEPLOYMENT was not set"]
+    lines = [
+        "  --    deployment: %s (%d of %d turns)"
+        % (label, count, len(observations))
+        for label, count in labels
+    ]
+    unlabelled = len(observations) - sum(count for _, count in labels)
+    if unlabelled:
+        # Partial coverage is the state worth naming, because it is the one a
+        # reader cannot infer from the counts above. A turn that died before a
+        # verdict is the likely one: those observations are written by a different
+        # line of the gate script than the ones that got a verdict, and a field
+        # added to only one of them is exactly how a deployment label goes missing
+        # from a run that claims to have it.
+        lines.append(
+            "        %d turn(s) carry no deployment label, so the rates below mix them in"
+            % unlabelled
+        )
+    if len(labels) > 1:
+        lines.append(
+            "        this sample MIXES %d deployments; every rate below is a rate for the"
+            % len(labels)
+        )
+        lines.append(
+            "        mixture and describes neither. Re-run per deployment before reading it"
+        )
+        lines.append(
+            "        as one -- a prompt edit validated on one model is unvalidated on the other."
+        )
+    return lines
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description="Summarise live-gate observations.")
     parser.add_argument("--min-rate", default="{}", help='JSON map of check code to required rate')
@@ -153,6 +218,9 @@ def main(argv=None):
     if not observations:
         print("  FAIL  no observations recorded, so nothing was checked")
         return 1
+
+    for line in describe_deployments(observations):
+        print(line)
 
     hard = count_severity(observations, HARD)
     infra = count_severity(observations, INFRA)

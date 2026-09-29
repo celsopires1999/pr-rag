@@ -1,3 +1,4 @@
+using PrRag.Application.Domain;
 using PrRag.Application.Services.Agents;
 using Xunit;
 
@@ -195,5 +196,47 @@ public class HandoffAttributionTests
         turn.RecordAnswerAuthor(AgentIds.Creation);
 
         Assert.Equal(AgentIds.Creation, turn.AnswerAgent);
+    }
+
+    /// <summary>
+    /// A turn that has not resolved its entry point has read no draft state, and
+    /// records nothing rather than recording "no draft".
+    /// </summary>
+    /// <remarks>
+    /// The reason the report field is <c>bool?</c> and not <c>bool</c>, and the
+    /// reason it is recorded beside the entry-point decision instead of in
+    /// <c>Begin</c>: composition resolves the entry point from
+    /// <see cref="RequisitionDraftSessionState.HasUnwrittenDraft"/>, so before that
+    /// runs there is no answer to record and a defaulted <c>false</c> would be a
+    /// claim about something never asked. A report built from such a context reads
+    /// as unevaluated, which is what keeps a 502's report distinguishable from an
+    /// ordinary turn.
+    /// <para>
+    /// Asserted here rather than through a chat turn because no chat turn can reach
+    /// it: composition happens in <c>CreateSessionAsync</c>, before the run, so
+    /// every report on disk was written after an entry point had been resolved. The
+    /// counterpart that reads a report off disk is
+    /// <c>AgentGraphTopologyTests.A_turn_that_failed_after_composing_records_the_state_it_read</c>,
+    /// which pins the value that <em>is</em> recorded.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public void A_turn_that_has_not_resolved_an_entry_point_records_no_draft_state()
+    {
+        var turn = new AgentTurnContext();
+        var state = new AgentSessionState();
+
+        turn.Begin(state, "session-a", topK: 5, minSimilarity: 0.7);
+        Assert.Null(turn.RequisitionDraftPendingAtEntry);
+
+        // A draft staged before the turn must not leak into a context that has not
+        // resolved anything, which is the same reset hazard as the handoff list's.
+        RequisitionDraftSessionState.Stage(
+            state,
+            new RequisitionDraft("SUP000001", "ITM0001", "Hydraulic pump.", 3m, "2026-10-01", "Ana Souza"));
+        turn.RequisitionDraftPendingAtEntry = true;
+
+        turn.Begin(state, "session-a", topK: 5, minSimilarity: 0.7);
+        Assert.Null(turn.RequisitionDraftPendingAtEntry);
     }
 }

@@ -1131,6 +1131,197 @@ public class AgentGraphTopologyTests : IAsyncLifetime
     }
 
     /// <summary>
+    /// The entry agent and the state it was chosen from are one decision, so the
+    /// report records both and they can only be true together.
+    /// </summary>
+    /// <remarks>
+    /// The two fields are read from the same predicate at the same moment
+    /// (<c>AgentRunService</c> composes the graph once, and records the reading
+    /// beside the slug). Asserting them in pairs is what keeps them from drifting:
+    /// a report claiming a creation-capability entry with no draft pending would
+    /// say the application routed a turn to the write capability for no recorded
+    /// reason, and nothing downstream could tell that from a routing bug.
+    /// <para>
+    /// The first half is a turn that entered the orchestrator because the session
+    /// held nothing; the second is a turn that entered the write capability
+    /// because the previous turn staged a draft. Fresh scope per turn, since the
+    /// entry point is resolved per request and a shared scope would compose once
+    /// and reuse turn one.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task The_entry_state_and_the_entry_agent_are_recorded_as_one_decision()
+    {
+        var sessionId = "entry-state-pairing";
+        using (var stage = _provider!.CreateScope())
+        {
+            var chat = stage.ServiceProvider.GetRequiredService<IChatService>();
+            RequisitionFlow.OnCreationAgent(
+                stage.ServiceProvider.GetRequiredService<FakeChatClient>(),
+                stage.ServiceProvider,
+                RequisitionFlow.Draft());
+
+            await chat.AnswerAsync(new ChatRequest
+            {
+                SessionId = sessionId,
+                Question = "create a purchase requisition for ITM0001 from SUP000001",
+                TopK = 5,
+                MinSimilarity = 0,
+            });
+        }
+
+        var noDraft = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Orchestrator, noDraft.EntryAgent);
+        Assert.False(noDraft.RequisitionDraftPendingAtEntry);
+
+        using var confirm = _provider!.CreateScope();
+        var confirmChat = confirm.ServiceProvider.GetRequiredService<IChatService>();
+        RequisitionFlow.ScriptConfirmedCreation(
+            confirm.ServiceProvider.GetRequiredService<FakeChatClient>(),
+            confirm.ServiceProvider);
+
+        await confirmChat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "yes, I confirm it",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var draftPending = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(AgentIds.Creation, draftPending.EntryAgent);
+        Assert.True(draftPending.RequisitionDraftPendingAtEntry);
+    }
+
+    /// <summary>
+    /// The turn the gate check exists for, reproduced in process: the application
+    /// routed to the write capability <em>because</em> a draft was staged, the
+    /// agent spoke to no tool at all, and the answer denied the draft.
+    /// </summary>
+    /// <remarks>
+    /// This is the <c>confirmed</c> probe's live shape, and the answer is the one
+    /// <c>gpt-5-mini</c> produced 3 turns out of 3 while the recorded report said
+    /// <c>EntryAgent=prrag.creation</c> and <c>tools=[]</c> — an ordinary turn
+    /// answered by the agent that was on the hook. The script is the model's half
+    /// of that turn, so nothing about the wording is under test; what is under test
+    /// is that all three facts the contradiction is made of are on the report:
+    /// the routing, the state behind it, and the absence of any write call.
+    /// <para>
+    /// Before <see cref="RagQueryReport.RequisitionDraftPendingAtEntry"/> this
+    /// report was unreadable. <see cref="RagQueryReport.RequisitionDraftStaged"/> is
+    /// a per-turn outcome latch, so it is false here — nothing was staged on this
+    /// turn — which is the opposite of what the session held, and the one number a
+    /// reader would have reached for.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_denial_of_the_draft_the_turn_was_routed_for_is_readable_off_the_report()
+    {
+        var sessionId = "denies-the-draft-it-was-routed-for";
+        using (var stage = _provider!.CreateScope())
+        {
+            var chat = stage.ServiceProvider.GetRequiredService<IChatService>();
+            RequisitionFlow.OnCreationAgent(
+                stage.ServiceProvider.GetRequiredService<FakeChatClient>(),
+                stage.ServiceProvider,
+                RequisitionFlow.Draft());
+
+            await chat.AnswerAsync(new ChatRequest
+            {
+                SessionId = sessionId,
+                Question = "create a purchase requisition for ITM0001 from SUP000001",
+                TopK = 5,
+                MinSimilarity = 0,
+            });
+        }
+
+        using var confirm = _provider!.CreateScope();
+        var confirmChat = confirm.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = confirm.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        // The whole failure, scripted: no handoff to reach (the turn enters here),
+        // no tool call, and a denial of the draft the routing just proved exists.
+        chatClient.AutoHandoff = false;
+        chatClient.Answer =
+            "I don't have a requisition draft awaiting confirmation in this session.";
+
+        var response = await confirmChat.AnswerAsync(new ChatRequest
+        {
+            SessionId = sessionId,
+            Question = "yes, I confirm it",
+            TopK = 5,
+            MinSimilarity = 0,
+        });
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+
+        // The three facts the contradiction is made of, none of which the report
+        // carried before this field existed.
+        Assert.Equal(AgentIds.Creation, report.EntryAgent);
+        Assert.True(report.RequisitionDraftPendingAtEntry);
+        Assert.False(report.WriteAttempted);
+
+        // And nothing in the turn touched the write path, so the denial was the
+        // agent's own account of application state rather than a reading of a
+        // tool result it had not called.
+        Assert.DoesNotContain(report.ToolCalls, t => ToolNames.Writes.Contains(t.Name));
+        Assert.Contains("don't have a requisition draft", response.Answer, StringComparison.Ordinal);
+
+        // The staging latch reads false here, which is what made the turn
+        // unreadable: nothing was staged on it, and that is not the same fact as
+        // the session holding nothing.
+        Assert.False(report.RequisitionDraftStaged);
+        Assert.False(report.RequisitionDraftConfirmed);
+        Assert.False(report.RequisitionPersisted);
+    }
+
+    /// <summary>
+    /// A turn that failed mid-run still records a state it read, not the absence
+    /// of one: the dead provider is an answered turn as far as the report is
+    /// concerned.
+    /// </summary>
+    /// <remarks>
+    /// The field is <c>bool?</c> so "never asked" is distinguishable from "asked,
+    /// and no draft" — and this pins the second half of that pair, because the
+    /// first is what a null is. The turn is the dead-provider shape: the framework
+    /// completes a run whose chat call threw, the report is written before
+    /// <c>/api/chat</c> answers 502, and the graph had already been composed when
+    /// the session was created — so the entry point was resolved from a session
+    /// that held nothing, and that read is on the record.
+    /// <para>
+    /// The null case is pinned one level down, by
+    /// <see cref="HandoffAttributionTests.A_turn_that_has_not_resolved_an_entry_point_records_no_draft_state"/>.
+    /// It cannot be driven through a chat turn: composition happens in
+    /// <c>CreateSessionAsync</c>, before the run, so every turn that writes a
+    /// report has already resolved an entry point. Asserting null here instead
+    /// would be asserting a defect.
+    /// </para>
+    /// </remarks>
+    [Fact]
+    public async Task A_turn_that_failed_after_composing_records_the_state_it_read()
+    {
+        using var scope = _provider!.CreateScope();
+        var chat = scope.ServiceProvider.GetRequiredService<IChatService>();
+        var chatClient = scope.ServiceProvider.GetRequiredService<FakeChatClient>();
+
+        chatClient.AutoHandoff = false;
+        chatClient.Answer = string.Empty;
+
+        await Assert.ThrowsAsync<ChatTurnFailedException>(
+            () => chat.AnswerAsync(new ChatRequest
+            {
+                Question = "what is requisition from supplier SUP000001?",
+                TopK = 5,
+                MinSimilarity = 0,
+            }));
+
+        var report = await ReadLastReportAsync(Path.Combine(_dataDir, "reports"));
+        Assert.Equal(string.Empty, report.Answer);
+        Assert.Equal(AgentIds.Orchestrator, report.EntryAgent);
+        Assert.False(report.RequisitionDraftPendingAtEntry);
+    }
+
+    /// <summary>
     /// Who wrote the answer, once a handoff has moved the turn.
     ///
     /// <para>

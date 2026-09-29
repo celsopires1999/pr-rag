@@ -125,15 +125,28 @@ public sealed class ToolSkillActivation
     public string? Body { get; set; }
 
     [JsonPropertyName("message")]
-    [Description("Human-readable outcome: the guidance to follow, or the reason activation failed")]
+    [Description("Human-readable outcome: the guidance to follow followed by who the capability belongs to, or the reason activation failed")]
     public string Message { get; set; } = string.Empty;
 
-    public static ToolSkillActivation Activated(string name, string body) => new()
+    /// <summary>
+    /// The guidance, then what it is: work for the capability that owns the tools
+    /// its steps name. The two travel together because the second qualifies the
+    /// first, and an agent that has just read a procedure is the one most likely to
+    /// perform it — see
+    /// <see cref="Specialists.SkillActivationSpecialist.OwnershipNotice"/> for why
+    /// this is a tool result and not prompt text.
+    /// </summary>
+    /// <remarks>
+    /// The body is untouched, so the guidance injected into later turns — which is
+    /// the body alone, not this message — is exactly the file's content and nothing
+    /// else.
+    /// </remarks>
+    public static ToolSkillActivation Activated(string name, string body, string notice) => new()
     {
         Name = name,
         Found = true,
         Body = body,
-        Message = body,
+        Message = string.IsNullOrWhiteSpace(notice) ? body : $"{body}\n\n{notice}",
     };
 
     public static ToolSkillActivation NotFound(string name, string message) => new()

@@ -287,6 +287,14 @@ public sealed class ChatService : IChatService
             // produced no text has no author and a defaulted one would read as an
             // ordinary turn answered in place.
             EntryAgent = _turnContext.EntryAgent,
+
+            // The state the entry point above was resolved from, so the routing
+            // decision and the reason for it are read as one pair. Copied
+            // verbatim, including the null: a turn that failed before composition
+            // read no session state, and reporting "no draft" there would be a
+            // claim about something never asked.
+            RequisitionDraftPendingAtEntry = _turnContext.RequisitionDraftPendingAtEntry,
+
             Handoffs = _turnContext.Handoffs,
             AnswerAgent = _turnContext.AnswerAgent,
 
